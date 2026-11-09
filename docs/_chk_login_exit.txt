@@ -1,0 +1,286 @@
+LINES=1780
+===== 438-457 =====
+ 438|#define IDC_BOTTOM_LBL 2705
+ 439|
+ 440|#define IDC_BTN_LOGOUT   2801
+ 441|#define IDC_BTN_EXIT     2802
+ 442|#define IDC_LBL_BTYPE    2610
+ 443|#define IDC_LBL_PRI      2611
+ 444|#define IDC_LBL_MSG      2612
+ 445|#define IDC_LBL_AUDIO    2613
+ 446|#define IDC_LBL_VOL      2614
+ 447|#define IDC_CHK_REMEMBER_USER 2901
+ 448|#define IDC_CHK_REMEMBER_PWD 2902
+ 449|#define IDC_LINK_REG 2903
+ 450|
+ 451|// 全局标志：标记是否退出登录（返回登录窗口）vs 关闭系统
+ 452|static bool g_isLogout = false;
+ 453|
+ 454|// 主控制台 UI
+ 455|#define IDC_TAB_BROADCAST 3001
+ 456|#define IDC_TAB_TRAIN 3002
+ 457|#define IDC_TAB_SCREEN 3003
+===== 495-509 =====
+ 495|    SetDlgItemTextW(hwnd, IDC_BOTTOM_LBL, s.c_str());
+ 496|}
+ 497|static HWND g_hMain = nullptr;
+ 498|static HWND g_hLogin = nullptr;
+ 499|
+ 500|// ============================================================
+ 501|// 主窗口：刷新车次列表
+ 502|// ============================================================
+ 503|static void refreshTrains(HWND hwnd) {
+ 504|    Resp r = callServer("\"GetActiveTrains\"");
+ 505|    HWND list = GetDlgItem(hwnd, IDC_TRAIN_LIST);
+ 506|    ListView_DeleteAllItems(list);
+ 507|    std::string v;
+ 508|    std::string raw = r.raw;
+ 509|    // 用 parseTrains 解析
+===== 698-737 =====
+ 698|        MoveWindow(GetDlgItem(hwnd, IDC_PB_DELAY2), 20, 65, ctrlW, 36, TRUE);
+ 699|        MoveWindow(GetDlgItem(hwnd, IDC_PB_CANCEL), 20 + ctrlW + 10, 65, ctrlW, 36, TRUE);
+ 700|        MoveWindow(GetDlgItem(hwnd, IDC_PB_CHIME), 20 + (ctrlW + 10) * 2, 65, ctrlW, 36, TRUE);
+ 701|
+ 702|        // 类型 / 优先级（避开快捷按钮第二行 y=65）
+ 703|        int formY = 118;
+ 704|        MoveWindow(GetDlgItem(hwnd, IDC_LBL_BTYPE), 20, formY, 50, 22, TRUE);
+ 705|        MoveWindow(GetDlgItem(hwnd, IDC_BTYPE_CMB), 70, formY - 2, 120, 180, TRUE);
+ 706|        MoveWindow(GetDlgItem(hwnd, IDC_LBL_PRI), 210, formY, 55, 22, TRUE);
+ 707|        MoveWindow(GetDlgItem(hwnd, IDC_PRI), 270, formY - 2, 40, 24, TRUE);
+ 708|
+ 709|        // 消息输入区
+ 710|        int msgY = 158;
+ 711|        MoveWindow(GetDlgItem(hwnd, IDC_LBL_MSG), 20, msgY, 50, 22, TRUE);
+ 712|        MoveWindow(GetDlgItem(hwnd, IDC_MSG), 70, msgY - 2, panelW - 200, 26, TRUE);
+ 713|        MoveWindow(GetDlgItem(hwnd, IDC_SEND), panelW - 120, msgY - 4, 100, 28, TRUE);
+ 714|
+ 715|        // 音频文件区
+ 716|        int audioY = 206;
+ 717|        MoveWindow(GetDlgItem(hwnd, IDC_LBL_AUDIO), 20, audioY, 70, 22, TRUE);
+ 718|        MoveWindow(GetDlgItem(hwnd, IDC_AUDIO_FILE), 90, audioY - 2, panelW - 430, 26, TRUE);
+ 719|        MoveWindow(GetDlgItem(hwnd, IDC_PLAY), panelW - 330, audioY - 4, 80, 28, TRUE);
+ 720|        MoveWindow(GetDlgItem(hwnd, IDC_STOP), panelW - 240, audioY - 4, 80, 28, TRUE);
+ 721|        MoveWindow(GetDlgItem(hwnd, IDC_PAUSE), panelW - 150, audioY - 4, 80, 28, TRUE);
+ 722|        MoveWindow(GetDlgItem(hwnd, IDC_RESUME), panelW - 60, audioY - 4, 50, 28, TRUE);
+ 723|
+ 724|        // 音量控制区 - 使用 Trackbar
+ 725|        int volY = 256;
+ 726|        MoveWindow(GetDlgItem(hwnd, IDC_LBL_VOL), 20, volY, 50, 22, TRUE);
+ 727|        MoveWindow(GetDlgItem(hwnd, IDC_VOL_SLIDER), 70, volY - 4, min(350, panelW - 320), 28, TRUE);
+ 728|        MoveWindow(GetDlgItem(hwnd, IDC_VOL_LABEL), 70 + min(350, panelW - 320) + 10, volY, 45, 26, TRUE);
+ 729|        MoveWindow(GetDlgItem(hwnd, IDC_SETVOL), panelW - 140, volY - 2, 110, 32, TRUE);
+ 730|    }
+ 731|
+ 732|    // 底部状态栏 - 固定在底部
+ 733|    MoveWindow(GetDlgItem(hwnd, IDC_BOTTOM_LBL), 15, H - bottomH + 5, W - 240, bottomH - 8, TRUE);
+ 734|    MoveWindow(GetDlgItem(hwnd, IDC_BTN_LOGOUT), W - 220, H - bottomH + 2, 100, 32, TRUE);
+ 735|    MoveWindow(GetDlgItem(hwnd, IDC_BTN_EXIT), W - 110, H - bottomH + 2, 100, 32, TRUE);
+ 736|}
+ 737|
+===== 860-899 =====
+ 860|        CreateWindowExW(0, L"BUTTON", L"股道广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 380, 20, 110, 35, panel2, (HMENU)IDC_PB_TRACK, nullptr, nullptr);
+ 861|        CreateWindowExW(0, L"BUTTON", L"行车广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 500, 20, 110, 35, panel2, (HMENU)IDC_PB_TRAFFIC, nullptr, nullptr);
+ 862|        CreateWindowExW(0, L"BUTTON", L"晚点广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 620, 20, 110, 35, panel2, (HMENU)IDC_PB_DELAY2, nullptr, nullptr);
+ 863|        CreateWindowExW(0, L"BUTTON", L"停运广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 20, 65, 110, 35, panel2, (HMENU)IDC_PB_CANCEL, nullptr, nullptr);
+ 864|        CreateWindowExW(0, L"BUTTON", L"提示音",   WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 140, 65, 110, 35, panel2, (HMENU)IDC_PB_CHIME, nullptr, nullptr);
+ 865|
+ 866|        CreateWindowExW(0, L"STATIC", L"类型：", WS_CHILD|WS_VISIBLE, 20, 118, 50, 22, panel2, (HMENU)IDC_LBL_BTYPE, nullptr, nullptr);
+ 867|        HWND bt = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST, 70, 116, 120, 180, panel2, (HMENU)IDC_BTYPE_CMB, nullptr, nullptr);
+ 868|        for (int i = 0; i < 7; i++) SendMessageW(bt, CB_ADDSTRING, 0, (LPARAM)BTYPE_ITEMS[i]);
+ 869|        SendMessageW(bt, CB_SETCURSEL, 0, 0);
+ 870|
+ 871|        CreateWindowExW(0, L"STATIC", L"优先级：", WS_CHILD|WS_VISIBLE, 210, 118, 55, 22, panel2, (HMENU)IDC_LBL_PRI, nullptr, nullptr);
+ 872|        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"5", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|ES_NUMBER, 270, 116, 40, 24, panel2, (HMENU)IDC_PRI, nullptr, nullptr);
+ 873|
+ 874|        CreateWindowExW(0, L"STATIC", L"内容：", WS_CHILD|WS_VISIBLE, 20, 158, 50, 22, panel2, (HMENU)IDC_LBL_MSG, nullptr, nullptr);
+ 875|        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 70, 156, 600, 24, panel2, (HMENU)IDC_MSG, nullptr, nullptr);
+ 876|        CreateWindowExW(0, L"BUTTON", L"发送广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 690, 154, 100, 28, panel2, (HMENU)IDC_SEND, nullptr, nullptr);
+ 877|
+ 878|        CreateWindowExW(0, L"STATIC", L"音频文件：", WS_CHILD|WS_VISIBLE, 20, 206, 70, 22, panel2, (HMENU)IDC_LBL_AUDIO, nullptr, nullptr);
+ 879|        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 204, 390, 24, panel2, (HMENU)IDC_AUDIO_FILE, nullptr, nullptr);
+ 880|        CreateWindowExW(0, L"BUTTON", L"播放", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 202, 80, 28, panel2, (HMENU)IDC_PLAY, nullptr, nullptr);
+ 881|        CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 580, 202, 80, 28, panel2, (HMENU)IDC_STOP, nullptr, nullptr);
+ 882|        CreateWindowExW(0, L"BUTTON", L"暂停", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 670, 202, 80, 28, panel2, (HMENU)IDC_PAUSE, nullptr, nullptr);
+ 883|        CreateWindowExW(0, L"BUTTON", L"恢复", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 760, 202, 80, 28, panel2, (HMENU)IDC_RESUME, nullptr, nullptr);
+ 884|
+ 885|        // 音量控制 - 使用 Trackbar 滑块替代静态文本
+ 886|        CreateWindowExW(0, L"STATIC", L"音量：", WS_CHILD|WS_VISIBLE, 20, 256, 50, 22, panel2, (HMENU)IDC_LBL_VOL, nullptr, nullptr);
+ 887|        HWND hVolSlider = CreateWindowExW(0, TRACKBAR_CLASSW, L"",
+ 888|            WS_CHILD|WS_VISIBLE|TBS_HORZ|TBS_AUTOTICKS,
+ 889|            70, 252, 300, 30, panel2, (HMENU)IDC_VOL_SLIDER, nullptr, nullptr);
+ 890|        SendMessageW(hVolSlider, TBM_SETRANGE, TRUE, MAKELPARAM(0, 100));
+ 891|        SendMessageW(hVolSlider, TBM_SETPOS, TRUE, 80);
+ 892|        SendMessageW(hVolSlider, TBM_SETTICFREQ, 10, 0);
+ 893|
+ 894|        // 音量数值显示
+ 895|        CreateWindowExW(0, L"STATIC", L"80%", WS_CHILD|WS_VISIBLE|SS_CENTER,
+ 896|            380, 190, 40, 22, panel2, (HMENU)IDC_VOL_LABEL, nullptr, nullptr);
+ 897|
+ 898|        CreateWindowExW(0, L"BUTTON", L"设置音量", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW,
+ 899|            430, 186, 90, 28, panel2, (HMENU)IDC_SETVOL, nullptr, nullptr);
+===== 1188-1237 =====
+1188|            std::wstring sv = L"{\"SetVolume\":{\"volume\":" + std::to_wstring(v) + L"}}";
+1189|            Resp r = callServer(wideToUtf8(sv));
+1190|            setBottomText(hwnd, r.msg);
+1191|            break;
+1192|        }
+1193|        case IDC_AUTO_CHK: {
+1194|            bool on = SendMessageW(GetDlgItem(hwnd, IDC_AUTO_CHK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1195|            std::wstring sv = L"{\"SetAutoMode\":{\"enabled\":";
+1196|            sv += on ? L"true}}" : L"false}}";
+1197|            Resp r = callServer(wideToUtf8(sv));
+1198|            setBottomText(hwnd, r.msg);
+1199|            break;
+1200|        }
+1201|        case IDC_BTN_LOGOUT: {
+1202|            if (customMessageBoxW(hwnd, L"确定退出登录并返回登录窗口？", L"确认", MB_YESNO) != IDOK) break;
+1203|            g_isLogout = true;
+1204|            ShowLoginWindow();
+1205|            break;
+1206|        }
+1207|        case IDC_BTN_EXIT: {
+1208|            if (customMessageBoxW(hwnd, L"确定关闭整个系统并停止后端？", L"确认", MB_YESNO) != IDOK) break;
+1209|            g_isLogout = false;
+1210|            callServer("\"Shutdown\"");
+1211|            tcpClose();
+1212|            g_connected = false;
+1213|            PostQuitMessage(0);
+1214|            break;
+1215|        }
+1216|        }
+1217|        return 0;
+1218|    }
+1219|    case WM_SIZE:
+1220|        LayoutMain(hwnd);
+1221|        return 0;
+1222|    case WM_TIMER: refreshStatus(hwnd); return 0;
+1223|    case WM_CLOSE: return 0;
+1224|    case WM_DESTROY:
+1225|        KillTimer(hwnd, 1);
+1226|        if (g_hMainBg) { DeleteObject(g_hMainBg); g_hMainBg = nullptr; }
+1227|        if (g_hMainEditBg) { DeleteObject(g_hMainEditBg); g_hMainEditBg = nullptr; }
+1228|        if (g_hMainTopBg) { DeleteObject(g_hMainTopBg); g_hMainTopBg = nullptr; }
+1229|        if (g_font) { DeleteObject(g_font); g_font = nullptr; }
+1230|        g_hMain = nullptr;
+1231|        if (!g_isLogout) PostQuitMessage(0);
+1232|        return 0;
+1233|    }
+1234|    return DefWindowProcW(hwnd, msg, wp, lp);
+1235|}
+1236|
+1237|
+===== 1568-1627 =====
+1568|    case WM_CTLCOLOREDIT: {
+1569|        HDC hdc = (HDC)wp;
+1570|        SetTextColor(hdc, RGB(240, 248, 255));
+1571|        SetBkColor(hdc, LOGIN_EDIT_BG);
+1572|        return (LRESULT)g_hLoginEditBg;
+1573|    }
+1574|    case WM_COMMAND: {
+1575|        int id = LOWORD(wp);
+1576|        if (id == IDC_BTN_LOGIN || id == IDOK) {
+1577|            std::wstring u = getEditW(hwnd, IDC_USER);
+1578|            std::wstring p = getEditW(hwnd, IDC_PWD);
+1579|            if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请输入账号和密码", L"提示", MB_OK); break; }
+1580|            std::wstring sen = L"{\"Login\":{\"username\":\"" + u + L"\",\"password\":\"" + p + L"\"}}";
+1581|            Resp r = callServer(wideToUtf8(sen));
+1582|            if (r.ok) {
+1583|                g_loggedIn = true;
+1584|                // 保存记住账号/密码
+1585|                {
+1586|                    std::wstring cfg = GetAppRoot() + L"\\config.ini";
+1587|                    BOOL ru = SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_USER), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1588|                    BOOL rp = SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_PWD), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1589|                    WritePrivateProfileStringW(L"login", L"remember_user", ru ? L"1" : L"0", cfg.c_str());
+1590|                    WritePrivateProfileStringW(L"login", L"remember_pwd", rp ? L"1" : L"0", cfg.c_str());
+1591|                    if (ru) WritePrivateProfileStringW(L"login", L"username", u.c_str(), cfg.c_str());
+1592|                    if (rp) WritePrivateProfileStringW(L"login", L"password", p.c_str(), cfg.c_str());
+1593|                }
+1594|                ShowMainWindow();
+1595|            } else {
+1596|                customMessageBoxW(hwnd, r.msg.c_str(), L"登录失败", MB_OK);
+1597|            }
+1598|        } else if (id == IDC_BTN_REG || id == IDC_LINK_REG) {
+1599|            std::wstring u = getEditW(hwnd, IDC_USER);
+1600|            std::wstring p = getEditW(hwnd, IDC_PWD);
+1601|            if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请先输入要注册的账号和密码", L"提示", MB_OK); break; }
+1602|            std::wstring sen = L"{\"Register\":{\"username\":\"" + u + L"\",\"password\":\"" + p + L"\"}}";
+1603|            Resp r = callServer(wideToUtf8(sen));
+1604|            if (r.ok) customMessageBoxW(hwnd, L"注册成功，请点登录", L"成功", MB_OK);
+1605|            else customMessageBoxW(hwnd, r.msg.c_str(), L"注册失败", MB_OK);
+1606|        } else if (id == IDC_BTN_EXIT) {
+1607|            if (customMessageBoxW(hwnd, L"确定退出系统？", L"确认", MB_YESNO) == IDOK) {
+1608|                DestroyWindow(hwnd);
+1609|                PostQuitMessage(0);
+1610|            }
+1611|        }
+1612|        return 0;
+1613|    }
+1614|    case WM_CLOSE: return 0;
+1615|    case WM_DESTROY:
+1616|        if (g_hLoginBg) DeleteObject(g_hLoginBg);
+1617|        if (g_hLoginLeftBg) DeleteObject(g_hLoginLeftBg);
+1618|        if (g_hLoginEditBg) DeleteObject(g_hLoginEditBg);
+1619|        if (g_fLoginBtn) DeleteObject(g_fLoginBtn);
+1620|        return 0;
+1621|    }
+1622|    return DefWindowProcW(hwnd, msg, wp, lp);
+1623|}
+1624|
+1625|// ============================================================
+1626|// WinMain
+1627|// ============================================================
+===== 1728-1780 =====
+1728|    mc.hInstance = hInst;
+1729|    mc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+1730|    mc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+1731|    mc.lpszClassName = L"MainWin";
+1732|    if (!GetClassInfoW(hInst, L"MainWin", &mc)) {
+1733|        RegisterClassW(&mc);
+1734|    }
+1735|
+1736|    int ret = 0;
+1737|    MSG msg;
+1738|
+1739|    g_loggedIn = false;
+1740|    g_isLogout = false;
+1741|
+1742|    HWND login = CreateWindowExW(0, L"LoginWin", L"",
+1743|        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+1744|        0, 0, 800, 500, nullptr, nullptr, hInst, nullptr);
+1745|    g_hLogin = login;
+1746|    {
+1747|        int sw = GetSystemMetrics(SM_CXSCREEN);
+1748|        int sh = GetSystemMetrics(SM_CYSCREEN);
+1749|        SetWindowPos(login, nullptr, (sw - 800) / 2, (sh - 500) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+1750|    }
+1751|
+1752|    HWND main = CreateWindowExW(0, L"MainWin", L"火车站广播调度系统 - 主控制台",
+1753|        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+1754|        0, 0, 1030, 660, nullptr, nullptr, hInst, nullptr);
+1755|    g_hMain = main;
+1756|    {
+1757|        int sw = GetSystemMetrics(SM_CXSCREEN);
+1758|        int sh = GetSystemMetrics(SM_CYSCREEN);
+1759|        SetWindowPos(main, nullptr, (sw - 1030) / 2, (sh - 660) / 2, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+1760|    }
+1761|    ShowWindow(main, SW_HIDE);
+1762|
+1763|    ShowWindow(login, nCmd);
+1764|    UpdateWindow(login);
+1765|
+1766|    while (GetMessageW(&msg, nullptr, 0, 0)) {
+1767|        TranslateMessage(&msg);
+1768|        DispatchMessageW(&msg);
+1769|    }
+1770|    ret = (int)msg.wParam;
+1771|
+1772|    if (g_hMain && IsWindow(g_hMain)) DestroyWindow(g_hMain);
+1773|    if (g_hLogin && IsWindow(g_hLogin)) DestroyWindow(g_hLogin);
+1774|
+1775|cleanup:
+1776|    tcpClose();
+1777|    WSACleanup();
+1778|    GdiplusShutdown(g_gdiToken);
+1779|    return ret;
+1780|}

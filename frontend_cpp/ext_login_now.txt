@@ -1,0 +1,92 @@
+FILE=ext_login_now.txt START=1540 END=1630 TOTAL=1782
+1540|        return 0;
+1541|    }
+1542|    case WM_DRAWITEM: {
+1543|        LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lp;
+1544|        if (dis->CtlID == IDC_BTN_LOGIN) {
+1545|            DrawLoginButton(dis, LOGIN_BTN_BLUE, LOGIN_BTN_BLUE_HI, L"登  录");
+1546|            return TRUE;
+1547|        } else if (dis->CtlID == IDC_BTN_EXIT) {
+1548|            DrawLoginButton(dis, LOGIN_BTN_GRAY, LOGIN_BTN_GRAY_HI, L"退  出");
+1549|            return TRUE;
+1550|        }
+1551|        break;
+1552|    }
+1553|    case WM_CTLCOLORSTATIC: {
+1554|        HDC hdc = (HDC)wp;
+1555|        HWND ctrl = (HWND)lp;
+1556|        RECT rc; GetWindowRect(ctrl, &rc);
+1557|        POINT pt = { rc.left, rc.top };
+1558|        ScreenToClient(hwnd, &pt);
+1559|        if (pt.x < 450) {
+1560|            SetTextColor(hdc, RGB(255, 255, 255));
+1561|            SetBkMode(hdc, TRANSPARENT);
+1562|            return (LRESULT)g_hLoginLeftBg;
+1563|        } else {
+1564|            SetTextColor(hdc, LOGIN_TEXT);
+1565|            SetBkMode(hdc, TRANSPARENT);
+1566|            return (LRESULT)g_hLoginBg;
+1567|        }
+1568|    }
+1569|    case WM_CTLCOLOREDIT: {
+1570|        HDC hdc = (HDC)wp;
+1571|        SetTextColor(hdc, RGB(240, 248, 255));
+1572|        SetBkColor(hdc, LOGIN_EDIT_BG);
+1573|        return (LRESULT)g_hLoginEditBg;
+1574|    }
+1575|    case WM_COMMAND: {
+1576|        int id = LOWORD(wp);
+1577|        if (id == IDC_BTN_LOGIN || id == IDOK) {
+1578|            std::wstring u = getEditW(hwnd, IDC_USER);
+1579|            std::wstring p = getEditW(hwnd, IDC_PWD);
+1580|            if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请输入账号和密码", L"提示", MB_OK); break; }
+1581|            std::wstring sen = L"{\"Login\":{\"username\":\"" + u + L"\",\"password\":\"" + p + L"\"}}";
+1582|            Resp r = callServer(wideToUtf8(sen));
+1583|            if (r.ok) {
+1584|                g_loggedIn = true;
+1585|                // 保存记住账号/密码
+1586|                {
+1587|                    std::wstring cfg = GetAppRoot() + L"\\config.ini";
+1588|                    BOOL ru = SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_USER), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1589|                    BOOL rp = SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_PWD), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1590|                    WritePrivateProfileStringW(L"login", L"remember_user", ru ? L"1" : L"0", cfg.c_str());
+1591|                    WritePrivateProfileStringW(L"login", L"remember_pwd", rp ? L"1" : L"0", cfg.c_str());
+1592|                    if (ru) WritePrivateProfileStringW(L"login", L"username", u.c_str(), cfg.c_str());
+1593|                    if (rp) WritePrivateProfileStringW(L"login", L"password", p.c_str(), cfg.c_str());
+1594|                }
+1595|                ShowMainWindow();
+1596|            } else {
+1597|                customMessageBoxW(hwnd, r.msg.c_str(), L"登录失败", MB_OK);
+1598|            }
+1599|        } else if (id == IDC_BTN_REG || id == IDC_LINK_REG) {
+1600|            std::wstring u = getEditW(hwnd, IDC_USER);
+1601|            std::wstring p = getEditW(hwnd, IDC_PWD);
+1602|            if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请先输入要注册的账号和密码", L"提示", MB_OK); break; }
+1603|            std::wstring sen = L"{\"Register\":{\"username\":\"" + u + L"\",\"password\":\"" + p + L"\"}}";
+1604|            Resp r = callServer(wideToUtf8(sen));
+1605|            if (r.ok) customMessageBoxW(hwnd, L"注册成功，请点登录", L"成功", MB_OK);
+1606|            else customMessageBoxW(hwnd, r.msg.c_str(), L"注册失败", MB_OK);
+1607|        } else if (id == IDC_BTN_EXIT) {
+1608|            if (customMessageBoxW(hwnd, L"确定退出系统？", L"确认", MB_YESNO) == IDOK) {
+1609|                DestroyWindow(hwnd);
+1610|                PostQuitMessage(0);
+1611|            }
+1612|        }
+1613|        return 0;
+1614|    }
+1615|    case WM_CLOSE: return 0;
+1616|    case WM_DESTROY:
+1617|        if (g_hLoginBg) DeleteObject(g_hLoginBg);
+1618|        if (g_hLoginLeftBg) DeleteObject(g_hLoginLeftBg);
+1619|        if (g_hLoginEditBg) DeleteObject(g_hLoginEditBg);
+1620|        if (g_fLoginBtn) DeleteObject(g_fLoginBtn);
+1621|        g_hLogin = nullptr;
+1622|        return 0;
+1623|    }
+1624|    return DefWindowProcW(hwnd, msg, wp, lp);
+1625|}
+1626|
+1627|// ============================================================
+1628|// WinMain
+1629|// ============================================================
+1630|// 自定义开机音乐：优先 audio/startup.wav / startup.mp3，找不到则用系统音

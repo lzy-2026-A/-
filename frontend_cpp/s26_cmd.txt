@@ -1,0 +1,132 @@
+MARK_s26_cmd.txt START=1080 END=1210 TOTAL=1782
+1080|        return TRUE;
+1081|    }
+1082|    case WM_HSCROLL: {
+1083|        // 处理音量滑块拖动
+1084|        if ((HWND)lp == GetDlgItem(hwnd, IDC_VOL_SLIDER)) {
+1085|            int v = (int)SendMessageW((HWND)lp, TBM_GETPOS, 0, 0);
+1086|            if (v < 0) v = 0; if (v > 100) v = 100;
+1087|            wchar_t volText[16];
+1088|            swprintf(volText, 16, L"%d%%", v);
+1089|            SetDlgItemTextW(hwnd, IDC_VOL_LABEL, volText);
+1090|        }
+1091|        return 0;
+1092|    }
+1093|    case WM_COMMAND: {
+1094|        int id = LOWORD(wp);
+1095|        switch (id) {
+1096|        case IDC_TAB_BROADCAST: SwitchPanel(hwnd, 0); break;
+1097|        case IDC_TAB_TRAIN: SwitchPanel(hwnd, 1); break;
+1098|        case IDC_TAB_SCREEN: SwitchPanel(hwnd, 2); break;
+1099|        case IDC_TAB_SYSTEM: SwitchPanel(hwnd, 3); break;
+1100|        case IDC_TAB_BROADCAST_SET: SwitchPanel(hwnd, 4); break;
+1101|        case IDC_ADD: {
+1102|            std::wstring num = getEditW(hwnd, IDC_NUM);
+1103|            if (num.empty()) { customMessageBoxW(hwnd, L"请输入车次号", L"提示", MB_OK); break; }
+1104|            std::wstring dep = getEditW(hwnd, IDC_DEP);
+1105|            std::wstring arr = getEditW(hwnd, IDC_ARR);
+1106|            std::wstring dt = getEditW(hwnd, IDC_DEPT);
+1107|            std::wstring plat = getEditW(hwnd, IDC_PLAT);
+1108|            int idx = (int)SendMessageW(GetDlgItem(hwnd, IDC_STATUS_CMB), CB_GETCURSEL, 0, 0);
+1109|            std::wstring sen = L"{\"AddTrain\":{\"train_number\":\"" + num + L"\",\"departure_station\":\"" + dep +
+1110|                L"\",\"arrival_station\":\"" + arr + L"\",\"departure_time\":\"" + dt + L"\",\"platform\":\"" + plat +
+1111|                L"\",\"status\":\"" + STATUS_EN[idx] + L"\"}}";
+1112|            Resp r = callServer(wideToUtf8(sen));
+1113|            setBottomText(hwnd, r.msg);
+1114|            if (r.ok) refreshTrains(hwnd);
+1115|            break;
+1116|        }
+1117|        case IDC_UPD: {
+1118|            int sel = ListView_GetNextItem(GetDlgItem(hwnd, IDC_TRAIN_LIST), -1, LVNI_SELECTED);
+1119|            if (sel < 0) { customMessageBoxW(hwnd, L"请先选择一列车次", L"提示", MB_OK); break; }
+1120|            wchar_t buf[64] = {0};
+1121|            ListView_GetItemText(GetDlgItem(hwnd, IDC_TRAIN_LIST), sel, 0, buf, 64);
+1122|            int idx = (int)SendMessageW(GetDlgItem(hwnd, IDC_STATUS_CMB), CB_GETCURSEL, 0, 0);
+1123|            std::wstring sen = L"{\"UpdateTrainStatus\":{\"train_number\":\"" + std::wstring(buf) + L"\",\"status\":\"" + STATUS_EN[idx] + L"\"}}";
+1124|            Resp r = callServer(wideToUtf8(sen));
+1125|            setBottomText(hwnd, r.msg);
+1126|            if (r.ok) { refreshTrains(hwnd); refreshStatus(hwnd); }
+1127|            break;
+1128|        }
+1129|        case IDC_DEL: {
+1130|            int sel = ListView_GetNextItem(GetDlgItem(hwnd, IDC_TRAIN_LIST), -1, LVNI_SELECTED);
+1131|            if (sel < 0) { customMessageBoxW(hwnd, L"请先选择一列车次", L"提示", MB_OK); break; }
+1132|            wchar_t buf[64] = {0};
+1133|            ListView_GetItemText(GetDlgItem(hwnd, IDC_TRAIN_LIST), sel, 0, buf, 64);
+1134|            if (customMessageBoxW(hwnd, (std::wstring(L"确定移除车次 ") + buf + L"？").c_str(), L"确认", MB_YESNO) != IDOK) break;
+1135|            std::wstring sen = L"{\"RemoveTrain\":{\"train_number\":\"" + std::wstring(buf) + L"\"}}";
+1136|            Resp r = callServer(wideToUtf8(sen));
+1137|            setBottomText(hwnd, r.msg);
+1138|            if (r.ok) refreshTrains(hwnd);
+1139|            break;
+1140|        }
+1141|        case IDC_REFRESH: refreshTrains(hwnd); refreshStatus(hwnd); break;
+1142|        case IDC_PB_WAITING:
+1143|        case IDC_PB_CHECKIN:
+1144|        case IDC_PB_BOARD: SendMessageW(GetDlgItem(hwnd, IDC_BTYPE_CMB), CB_SETCURSEL, 0, 0); break;
+1145|        case IDC_PB_DELAY:
+1146|        case IDC_PB_DELAY2: SendMessageW(GetDlgItem(hwnd, IDC_BTYPE_CMB), CB_SETCURSEL, 1, 0); break;
+1147|        case IDC_PB_SAFE:
+1148|        case IDC_PB_PLATFORM:
+1149|        case IDC_PB_TRACK:
+1150|        case IDC_PB_TRAFFIC: SendMessageW(GetDlgItem(hwnd, IDC_BTYPE_CMB), CB_SETCURSEL, 2, 0); break;
+1151|        case IDC_PB_EMG:
+1152|        case IDC_PB_CANCEL:
+1153|        case IDC_PB_CHIME: SendMessageW(GetDlgItem(hwnd, IDC_BTYPE_CMB), CB_SETCURSEL, 3, 0); break;
+1154|        case IDC_SEND: {
+1155|            std::wstring msg = getEditW(hwnd, IDC_MSG);
+1156|            if (msg.empty()) { customMessageBoxW(hwnd, L"请输入广播内容", L"提示", MB_OK); break; }
+1157|            int idx = (int)SendMessageW(GetDlgItem(hwnd, IDC_BTYPE_CMB), CB_GETCURSEL, 0, 0);
+1158|            int pri = _wtoi(getEditW(hwnd, IDC_PRI).c_str());
+1159|            if (pri < 1) pri = 5;
+1160|            std::wstring sen = L"{\"AddManualBroadcast\":{\"broadcast_type\":\"" + std::wstring(BTYPE_EN[idx]) +
+1161|                L"\",\"train_info\":null,\"message\":\"" + msg + L"\",\"audio_file\":null,\"priority\":" + std::to_wstring(pri) + L"}}";
+1162|            Resp r = callServer(wideToUtf8(sen));
+1163|            setBottomText(hwnd, r.msg);
+1164|            if (r.ok) { SetDlgItemTextW(hwnd, IDC_MSG, L""); refreshStatus(hwnd); }
+1165|            break;
+1166|        }
+1167|        case IDC_PLAY: {
+1168|            std::wstring f = getEditW(hwnd, IDC_AUDIO_FILE);
+1169|            if (f.empty()) { customMessageBoxW(hwnd, L"请输入音频文件名", L"提示", MB_OK); break; }
+1170|            std::wstring sen = L"{\"PlayAudio\":{\"path\":\"" + f + L"\"}}";
+1171|            Resp r = callServer(wideToUtf8(sen));
+1172|            setBottomText(hwnd, r.msg);
+1173|            refreshStatus(hwnd);
+1174|            break;
+1175|        }
+1176|        case IDC_STOP: { Resp r = callServer("\"StopAudio\""); setBottomText(hwnd, r.msg); refreshStatus(hwnd); break; }
+1177|        case IDC_PAUSE: { Resp r = callServer("\"PauseAudio\""); setBottomText(hwnd, r.msg); refreshStatus(hwnd); break; }
+1178|        case IDC_RESUME: { Resp r = callServer("\"ResumeAudio\""); setBottomText(hwnd, r.msg); refreshStatus(hwnd); break; }
+1179|        case IDC_SETVOL: {
+1180|            // 从 Trackbar 获取音量值
+1181|            HWND hSlider = GetDlgItem(hwnd, IDC_VOL_SLIDER);
+1182|            int v = (int)SendMessageW(hSlider, TBM_GETPOS, 0, 0);
+1183|            if (v < 0) v = 0; if (v > 100) v = 100;
+1184|            // 更新显示标签
+1185|            wchar_t volText[16];
+1186|            swprintf(volText, 16, L"%d%%", v);
+1187|            SetDlgItemTextW(hwnd, IDC_VOL_LABEL, volText);
+1188|            // 发送到服务器
+1189|            std::wstring sv = L"{\"SetVolume\":{\"volume\":" + std::to_wstring(v) + L"}}";
+1190|            Resp r = callServer(wideToUtf8(sv));
+1191|            setBottomText(hwnd, r.msg);
+1192|            break;
+1193|        }
+1194|        case IDC_AUTO_CHK: {
+1195|            bool on = SendMessageW(GetDlgItem(hwnd, IDC_AUTO_CHK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1196|            std::wstring sv = L"{\"SetAutoMode\":{\"enabled\":";
+1197|            sv += on ? L"true}}" : L"false}}";
+1198|            Resp r = callServer(wideToUtf8(sv));
+1199|            setBottomText(hwnd, r.msg);
+1200|            break;
+1201|        }
+1202|        case IDC_BTN_LOGOUT: {
+1203|            if (customMessageBoxW(hwnd, L"确定退出登录并返回登录窗口？", L"确认", MB_YESNO) != IDOK) break;
+1204|            g_isLogout = true;
+1205|            ShowLoginWindow();
+1206|            break;
+1207|        }
+1208|        case IDC_BTN_EXIT: {
+1209|            if (customMessageBoxW(hwnd, L"确定关闭整个系统并停止后端？", L"确认", MB_YESNO) != IDOK) break;
+1210|            g_isLogout = false;

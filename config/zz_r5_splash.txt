@@ -1,0 +1,41 @@
+1310|
+1311|            // 版本号
+1312|            Font verFont(&ff, 12, FontStyleRegular, UnitPixel);
+1313|            SolidBrush gray(Color(255, 200, 210, 230));
+1314|            RectF verRect(0, 378, (REAL)rc.right, 22);
+1315|            g.DrawString(L"V26.9.25", -1, &verFont, verRect, &sf, &gray);
+1316|
+1317|            // 提示语
+1318|            Font hintFont(&ff, 11, FontStyleRegular, UnitPixel);
+1319|            SolidBrush lightGray(Color(255, 220, 230, 245));
+1320|            RectF hintRect(0, 405, (REAL)rc.right, 20);
+1321|            g.DrawString(L"系统正在启动中...", -1, &hintFont, hintRect, &sf, &lightGray);
+1322|        }
+1323|        EndPaint(hwnd, &ps);
+1324|        return 0;
+1325|    }
+1326|    case WM_TIMER: {
+1327|        DWORD elapsed = GetTickCount() - g_splashStartTick;
+1328|        // 保底显示 2 秒；有自定义音乐时等它播完，无音乐时 2 秒后关
+1329|        if (elapsed >= 2000 && musicDone()) {
+1330|            stopStartupMusic();
+1331|            KillTimer(hwnd, 1);
+1332|            DestroyWindow(hwnd);
+1333|            PostQuitMessage(0); // 让 splash 消息循环退出，继续创建登录窗口
+1334|        }
+1335|        return 0;
+1336|    }
+1337|    case WM_ERASEBKGND: return 1;
+1338|    case WM_DESTROY: return 0;
+1339|    }
+1340|    return DefWindowProcW(hwnd, msg, wp, lp);
+1341|}
+1342|
+1343|// ============================================================
+1344|// 登录窗口
+1345|// ============================================================
+1346|// g_hLogin / g_loggedIn 已在文件前部统一定义
+1347|
+1348|
+1349|// 深色风格配色
+1350|#define LOGIN_BG_RIGHT    RGB(26, 37, 64)    // 右侧深灰蓝

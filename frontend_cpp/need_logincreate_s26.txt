@@ -1,0 +1,147 @@
+MARK_need_logincreate_s26.txt START=1400 END=1545 TOTAL=1782
+1400|    HPEN pen = CreatePen(PS_SOLID, 1, RGB(30, 50, 90));
+1401|    HPEN oldPen = (HPEN)SelectObject(hdc, pen);
+1402|    HBRUSH oldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+1403|    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, 8, 8);
+1404|    SelectObject(hdc, oldPen);
+1405|    SelectObject(hdc, oldBr);
+1406|    DeleteObject(pen);
+1407|
+1408|    // 文字
+1409|    SetBkMode(hdc, TRANSPARENT);
+1410|    SetTextColor(hdc, RGB(255, 255, 255));
+1411|    if (g_fLoginBtn) SelectObject(hdc, g_fLoginBtn);
+1412|    DrawTextW(hdc, const_cast<LPWSTR>(text), -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+1413|
+1414|    SelectClipRgn(hdc, nullptr);
+1415|    DeleteObject(rgn);
+1416|}
+1417|
+1418|static LRESULT CALLBACK LoginProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+1419|    switch (msg) {
+1420|    case WM_CREATE: {
+1421|        g_hLogin = hwnd;
+1422|        g_hLoginBg = CreateSolidBrush(LOGIN_BG_RIGHT);
+1423|        g_hLoginLeftBg = CreateSolidBrush(LOGIN_BG_LEFT);
+1424|        g_hLoginEditBg = CreateSolidBrush(LOGIN_EDIT_BG);
+1425|
+1426|        HFONT fTitle = CreateFontW(20, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+1427|            GB2312_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"微软雅黑");
+1428|        HFONT fLabel = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+1429|            GB2312_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"微软雅黑");
+1430|        HFONT fEdit = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+1431|            GB2312_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"微软雅黑");
+1432|        g_fLoginBtn = CreateFontW(14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+1433|            GB2312_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"微软雅黑");
+1434|        HFONT fSmall = CreateFontW(11, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+1435|            GB2312_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"微软雅黑");
+1436|
+1437|        // 右侧标题
+1438|        HWND t = CreateWindowExW(0, L"STATIC", L"统一身份认证",
+1439|            WS_CHILD|WS_VISIBLE, 490, 50, 260, 32, hwnd, nullptr, nullptr, nullptr);
+1440|        SendMessageW(t, WM_SETFONT, (WPARAM)fTitle, TRUE);
+1441|
+1442|        // 账号
+1443|        CreateWindowExW(0, L"STATIC", L"登录账号", WS_CHILD|WS_VISIBLE, 490, 115, 100, 20, hwnd, nullptr, nullptr, nullptr);
+1444|        HWND u = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 490, 140, 260, 28, hwnd, (HMENU)IDC_USER, nullptr, nullptr);
+1445|        SendMessageW(u, WM_SETFONT, (WPARAM)fEdit, TRUE);
+1446|
+1447|        // 密码
+1448|        CreateWindowExW(0, L"STATIC", L"登录密码", WS_CHILD|WS_VISIBLE, 490, 185, 100, 20, hwnd, nullptr, nullptr, nullptr);
+1449|        HWND p = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|ES_PASSWORD, 490, 210, 260, 28, hwnd, (HMENU)IDC_PWD, nullptr, nullptr);
+1450|        SendMessageW(p, WM_SETFONT, (WPARAM)fEdit, TRUE);
+1451|
+1452|        // 选项
+1453|        CreateWindowExW(0, L"BUTTON", L"记住账号", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 490, 255, 90, 22, hwnd, (HMENU)IDC_CHK_REMEMBER_USER, nullptr, nullptr);
+1454|        SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_USER), WM_SETFONT, (WPARAM)fSmall, TRUE);
+1455|        CreateWindowExW(0, L"BUTTON", L"记住密码", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 585, 255, 90, 22, hwnd, (HMENU)IDC_CHK_REMEMBER_PWD, nullptr, nullptr);
+1456|        SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_PWD), WM_SETFONT, (WPARAM)fSmall, TRUE);
+1457|        HWND link = CreateWindowExW(0, L"STATIC", L"注册账号", WS_CHILD|WS_VISIBLE|SS_NOTIFY, 690, 255, 60, 22, hwnd, (HMENU)IDC_LINK_REG, nullptr, nullptr);
+1458|        SendMessageW(link, WM_SETFONT, (WPARAM)fSmall, TRUE);
+1459|
+1460|        // 自绘按钮
+1461|        CreateWindowExW(0, L"BUTTON", L"登  录", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 295, 260, 38, hwnd, (HMENU)IDC_BTN_LOGIN, nullptr, nullptr);
+1462|        CreateWindowExW(0, L"BUTTON", L"退  出", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 348, 260, 34, hwnd, (HMENU)IDC_BTN_EXIT, nullptr, nullptr);
+1463|
+1464|        CreateWindowExW(0, L"STATIC", L"V26.9.25", WS_CHILD|WS_VISIBLE|SS_RIGHT, 650, 460, 100, 18, hwnd, nullptr, nullptr, nullptr);
+1465|
+1466|        // 读取配置文件：记住账号/密码
+1467|        {
+1468|            std::wstring cfg = GetAppRoot() + L"\\config.ini";
+1469|            wchar_t userBuf[128] = {0}, pwdBuf[128] = {0};
+1470|            DWORD ru = GetPrivateProfileStringW(L"login", L"username", L"", userBuf, 128, cfg.c_str());
+1471|            DWORD rp = GetPrivateProfileStringW(L"login", L"password", L"", pwdBuf, 128, cfg.c_str());
+1472|            BOOL rememberUser = GetPrivateProfileIntW(L"login", L"remember_user", 0, cfg.c_str());
+1473|            BOOL rememberPwd = GetPrivateProfileIntW(L"login", L"remember_pwd", 0, cfg.c_str());
+1474|            if (rememberUser) {
+1475|                SetDlgItemTextW(hwnd, IDC_USER, userBuf);
+1476|                SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_USER), BM_SETCHECK, BST_CHECKED, 0);
+1477|            }
+1478|            if (rememberPwd && rp > 0) {
+1479|                SetDlgItemTextW(hwnd, IDC_PWD, pwdBuf);
+1480|                SendMessageW(GetDlgItem(hwnd, IDC_CHK_REMEMBER_PWD), BM_SETCHECK, BST_CHECKED, 0);
+1481|            }
+1482|        }
+1483|
+1484|        disableCloseButton(hwnd);
+1485|        return 0;
+1486|    }
+1487|    case WM_ERASEBKGND: {
+1488|        RECT rc; GetClientRect(hwnd, &rc);
+1489|        // 整个右侧深色
+1490|        FillRect((HDC)wp, &rc, g_hLoginBg);
+1491|        // 左侧更深
+1492|        RECT leftRc = {0, 0, 450, rc.bottom};
+1493|        FillRect((HDC)wp, &leftRc, g_hLoginLeftBg);
+1494|        return 1;
+1495|    }
+1496|    case WM_PAINT: {
+1497|        PAINTSTRUCT ps;
+1498|        HDC hdc = BeginPaint(hwnd, &ps);
+1499|        {
+1500|            Graphics g(hdc);
+1501|            g.SetSmoothingMode(SmoothingModeAntiAlias);
+1502|            g.SetInterpolationMode(InterpolationModeHighQualityBicubic);
+1503|
+1504|            std::wstring root = GetAppRoot();
+1505|            std::wstring i1 = root + L"\\images\\startup2.png";
+1506|            std::wstring i2 = root + L"\\images\\startup2.jpg";
+1507|            Image* img = nullptr;
+1508|            const wchar_t* paths[] = { i1.c_str(), i2.c_str(), L"images\\startup2.png", L"images\\startup2.jpg" };
+1509|            for (auto pp : paths) {
+1510|                if (GetFileAttributesW(pp) != INVALID_FILE_ATTRIBUTES) {
+1511|                    img = Image::FromFile(pp);
+1512|                    if (img && img->GetLastStatus() == Ok) break;
+1513|                    delete img; img = nullptr;
+1514|                }
+1515|            }
+1516|            if (img) {
+1517|                g.DrawImage(img, 0, 0, 450, 500);
+1518|                delete img;
+1519|            }
+1520|
+1521|            FontFamily ff(L"微软雅黑");
+1522|            StringFormat sf;
+1523|            sf.SetAlignment(StringAlignmentCenter);
+1524|
+1525|            // 半透明黑色圆角背景条，衬托文字（黑白图片上也清晰）
+1526|            SolidBrush barBrush(Color(150, 0, 0, 0));
+1527|            RectF barRect(10, 180, 430, 105);
+1528|            GdiFillRoundRect(g, barRect, 14, barBrush);
+1529|
+1530|            // 白色主文字
+1531|            SolidBrush whiteBrush(Color(255, 255, 255, 255));
+1532|            Font titleFont(&ff, 25, FontStyleBold, UnitPixel);
+1533|            RectF titleRect(20, 190, 410, 42);
+1534|            g.DrawString(L"旅客服务系统智能管理平台", -1, &titleFont, titleRect, &sf, &whiteBrush);
+1535|            Font subFont(&ff, 14, FontStyleBold, UnitPixel);
+1536|            RectF subRect(20, 246, 410, 24);
+1537|            g.DrawString(L"为旅客服务系统广播平台设计的软件", -1, &subFont, subRect, &sf, &whiteBrush);
+1538|        }
+1539|        EndPaint(hwnd, &ps);
+1540|        return 0;
+1541|    }
+1542|    case WM_DRAWITEM: {
+1543|        LPDRAWITEMSTRUCT dis = (LPDRAWITEMSTRUCT)lp;
+1544|        if (dis->CtlID == IDC_BTN_LOGIN) {
+1545|            DrawLoginButton(dis, LOGIN_BTN_BLUE, LOGIN_BTN_BLUE_HI, L"登  录");

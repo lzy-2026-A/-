@@ -1,0 +1,62 @@
+MARK_s26_mb.txt START=120 END=180 TOTAL=1782
+120|}
+121|
+122|static int customMessageBoxW(HWND parent, const wchar_t* text, const wchar_t* caption, UINT type) {
+123|    WNDCLASSW wc = {0};
+124|    wc.lpfnWndProc = MbProc;
+125|    wc.hInstance = GetModuleHandleW(nullptr);
+126|    wc.lpszClassName = L"CustomMsgBox";
+127|    wc.hbrBackground = nullptr;
+128|    RegisterClassW(&wc);
+129|
+130|    int sw = GetSystemMetrics(SM_CXSCREEN);
+131|    int sh = GetSystemMetrics(SM_CYSCREEN);
+132|    int w = 400, h = 200;
+133|    HWND mb = CreateWindowExW(WS_EX_DLGMODALFRAME, L"CustomMsgBox", caption,
+134|        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+135|        (sw - w) / 2, (sh - h) / 2, w, h, parent, nullptr, GetModuleHandleW(nullptr), (LPVOID)text);
+136|    ShowWindow(mb, SW_SHOW);
+137|    UpdateWindow(mb);
+138|
+139|    // 模态：禁用父窗口
+140|    if (parent) EnableWindow(parent, FALSE);
+141|
+142|    MSG msg;
+143|    // 用 PeekMessage 轮询：窗口销毁后 IsWindow 立即为假，循环可靠退出
+144|    while (IsWindow(mb)) {
+145|        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+146|            TranslateMessage(&msg);
+147|            DispatchMessageW(&msg);
+148|        }
+149|        Sleep(10);
+150|    }
+151|
+152|    if (parent) {
+153|        EnableWindow(parent, TRUE);
+154|        SetForegroundWindow(parent);
+155|    }
+156|    return g_mbResult;
+157|}
+158|
+159|// ============================================================
+160|// 编码转换工具
+161|// ============================================================
+162|static std::wstring utf8ToWide(const std::string& s) {
+163|    if (s.empty()) return L"";
+164|    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+165|    std::wstring out(n, 0);
+166|    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n);
+167|    return out;
+168|}
+169|static std::string wideToUtf8(const std::wstring& s) {
+170|    if (s.empty()) return "";
+171|    int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+172|    std::string out(n, 0);
+173|    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), &out[0], n, nullptr, nullptr);
+174|    return out;
+175|}
+176|static std::wstring gbkToWide(const std::string& s) {
+177|    if (s.empty()) return L"";
+178|    int n = MultiByteToWideChar(936, 0, s.c_str(), (int)s.size(), nullptr, 0); // 936 = GBK
+179|    std::wstring out(n, 0);
+180|    MultiByteToWideChar(936, 0, s.c_str(), (int)s.size(), &out[0], n);

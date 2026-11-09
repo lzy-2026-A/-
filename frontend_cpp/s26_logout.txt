@@ -1,0 +1,54 @@
+MARK_s26_logout.txt START=1188 END=1240 TOTAL=1782
+1188|            // 发送到服务器
+1189|            std::wstring sv = L"{\"SetVolume\":{\"volume\":" + std::to_wstring(v) + L"}}";
+1190|            Resp r = callServer(wideToUtf8(sv));
+1191|            setBottomText(hwnd, r.msg);
+1192|            break;
+1193|        }
+1194|        case IDC_AUTO_CHK: {
+1195|            bool on = SendMessageW(GetDlgItem(hwnd, IDC_AUTO_CHK), BM_GETCHECK, 0, 0) == BST_CHECKED;
+1196|            std::wstring sv = L"{\"SetAutoMode\":{\"enabled\":";
+1197|            sv += on ? L"true}}" : L"false}}";
+1198|            Resp r = callServer(wideToUtf8(sv));
+1199|            setBottomText(hwnd, r.msg);
+1200|            break;
+1201|        }
+1202|        case IDC_BTN_LOGOUT: {
+1203|            if (customMessageBoxW(hwnd, L"确定退出登录并返回登录窗口？", L"确认", MB_YESNO) != IDOK) break;
+1204|            g_isLogout = true;
+1205|            ShowLoginWindow();
+1206|            break;
+1207|        }
+1208|        case IDC_BTN_EXIT: {
+1209|            if (customMessageBoxW(hwnd, L"确定关闭整个系统并停止后端？", L"确认", MB_YESNO) != IDOK) break;
+1210|            g_isLogout = false;
+1211|            callServer("\"Shutdown\"");
+1212|            tcpClose();
+1213|            g_connected = false;
+1214|            PostQuitMessage(0);
+1215|            break;
+1216|        }
+1217|        }
+1218|        return 0;
+1219|    }
+1220|    case WM_SIZE:
+1221|        LayoutMain(hwnd);
+1222|        return 0;
+1223|    case WM_TIMER: refreshStatus(hwnd); return 0;
+1224|    case WM_CLOSE: return 0;
+1225|    case WM_DESTROY:
+1226|        KillTimer(hwnd, 1);
+1227|        if (g_hMainBg) { DeleteObject(g_hMainBg); g_hMainBg = nullptr; }
+1228|        if (g_hMainEditBg) { DeleteObject(g_hMainEditBg); g_hMainEditBg = nullptr; }
+1229|        if (g_hMainTopBg) { DeleteObject(g_hMainTopBg); g_hMainTopBg = nullptr; }
+1230|        if (g_font) { DeleteObject(g_font); g_font = nullptr; }
+1231|        g_hMain = nullptr;
+1232|        if (!g_isLogout) PostQuitMessage(0);
+1233|        return 0;
+1234|    }
+1235|    return DefWindowProcW(hwnd, msg, wp, lp);
+1236|}
+1237|
+1238|
+1239|// ============================================================
+1240|// 启动画面（Splash）：音乐播完后自动关闭进入登录

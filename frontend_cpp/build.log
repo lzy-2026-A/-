@@ -1,0 +1,8 @@
+main.cpp
+main.cpp(597): warning C4005: 'MAIN_BG': macro redefinition
+main.cpp(583): note: see previous definition of 'MAIN_BG'
+main.cpp(600): warning C4005: 'MAIN_TEXT': macro redefinition
+main.cpp(584): note: see previous definition of 'MAIN_TEXT'
+main.cpp(609): warning C4005: 'MAIN_EDIT_BG': macro redefinition
+main.cpp(585): note: see previous definition of 'MAIN_EDIT_BG'
+main.cpp(1818): warning C4102: 'cleanup': unreferenced label

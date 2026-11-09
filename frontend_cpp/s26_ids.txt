@@ -1,0 +1,142 @@
+MARK_s26_ids.txt START=380 END=520 TOTAL=1782
+380|    } else {
+381|        r.ok = true; // 数据型响应（如 ActiveTrains/SystemStatus）
+382|    }
+383|    return r;
+384|}
+385|
+386|// ============================================================
+387|// 控件 ID
+388|// ============================================================
+389|#define IDC_USER 1001
+390|#define IDC_PWD 1002
+391|#define IDC_BTN_LOGIN 1003
+392|#define IDC_BTN_REG 1004
+393|
+394|#define IDC_TRAIN_LIST 2001
+395|#define IDC_NUM 2101
+396|#define IDC_DEP 2102
+397|#define IDC_ARR 2103
+398|#define IDC_DEPT 2104
+399|#define IDC_PLAT 2105
+400|#define IDC_STATUS_CMB 2106
+401|#define IDC_ADD 2201
+402|#define IDC_UPD 2202
+403|#define IDC_DEL 2203
+404|#define IDC_REFRESH 2204
+405|
+406|#define IDC_BTYPE_CMB 2301
+407|#define IDC_MSG 2302
+408|#define IDC_PRI 2303
+409|#define IDC_SEND 2304
+410|#define IDC_PB_BOARD 2401
+411|#define IDC_PB_DELAY 2402
+412|#define IDC_PB_SAFE 2403
+413|#define IDC_PB_EMG 2404
+414|
+415|#define IDC_AUDIO_FILE 2501
+416|#define IDC_PLAY 2502
+417|#define IDC_STOP 2503
+418|#define IDC_PAUSE 2504
+419|#define IDC_RESUME 2505
+420|#define IDC_VOL_SLIDER 2506
+421|#define IDC_VOL_LABEL 2507
+422|#define IDC_SETVOL 2508
+423|
+424|// 广播面板按钮 ID - 每个按钮有唯一 ID（使用 2600+ 避免与其他 ID 冲突）
+425|#define IDC_PB_WAITING 2601
+426|#define IDC_PB_CHECKIN 2602
+427|#define IDC_PB_PLATFORM 2603
+428|#define IDC_PB_TRACK 2604
+429|#define IDC_PB_TRAFFIC 2605
+430|#define IDC_PB_DELAY2 2606
+431|#define IDC_PB_CANCEL 2607
+432|#define IDC_PB_CHIME 2608
+433|
+434|#define IDC_AUTO_CHK 2701
+435|#define IDC_QUEUE_LBL 2702
+436|#define IDC_AUDIO_LBL 2703
+437|#define IDC_SYS_LBL 2704
+438|#define IDC_BOTTOM_LBL 2705
+439|
+440|#define IDC_BTN_LOGOUT   2801
+441|#define IDC_BTN_EXIT     2802
+442|#define IDC_LBL_BTYPE    2610
+443|#define IDC_LBL_PRI      2611
+444|#define IDC_LBL_MSG      2612
+445|#define IDC_LBL_AUDIO    2613
+446|#define IDC_LBL_VOL      2614
+447|#define IDC_CHK_REMEMBER_USER 2901
+448|#define IDC_CHK_REMEMBER_PWD 2902
+449|#define IDC_LINK_REG 2903
+450|
+451|// 全局标志：标记是否退出登录（返回登录窗口）vs 关闭系统
+452|static bool g_isLogout = false;
+453|
+454|// 主控制台 UI
+455|#define IDC_TAB_BROADCAST 3001
+456|#define IDC_TAB_TRAIN 3002
+457|#define IDC_TAB_SCREEN 3003
+458|#define IDC_TAB_SYSTEM 3004
+459|#define IDC_TAB_BROADCAST_SET 3005
+460|#define IDC_TOP_TITLE 3101
+461|#define IDC_TOP_CITY 3102
+462|#define IDC_TOP_WELCOME 3103
+463|#define IDC_PANEL_BROADCAST 3201
+464|#define IDC_PANEL_TRAIN 3202
+465|#define IDC_PANEL_SCREEN 3203
+466|#define IDC_PANEL_SYSTEM 3204
+467|#define IDC_PANEL_BROADCAST_SET 3205
+468|
+469|static HFONT g_font = nullptr;
+470|
+471|// 状态/类型 映射
+472|static const wchar_t* STATUS_ITEMS[] = {L"计划中", L"检票中", L"晚点", L"已发车", L"已到达", L"取消"};
+473|static const wchar_t* STATUS_EN[]   = {L"Scheduled", L"Boarding", L"Delayed", L"Departed", L"Arrived", L"Cancelled"};
+474|static const wchar_t* BTYPE_ITEMS[] = {L"检票广播", L"晚点广播", L"安全提醒", L"紧急通知", L"欢迎词", L"欢送词", L"站台变更"};
+475|static const wchar_t* BTYPE_EN[]   = {L"BoardingAnnouncement", L"DelayAnnouncement", L"SafetyReminder", L"EmergencyNotice", L"WelcomeMessage", L"FarewellMessage", L"PlatformChange"};
+476|
+477|static std::wstring statusZh2En(const std::wstring& zh) {
+478|    for (int i = 0; i < 6; i++) if (zh == STATUS_ITEMS[i]) return STATUS_EN[i];
+479|    return L"Scheduled";
+480|}
+481|static std::wstring statusEn2Zh(const std::wstring& en) {
+482|    for (int i = 0; i < 6; i++) if (en == STATUS_EN[i]) return STATUS_ITEMS[i];
+483|    return en;
+484|}
+485|
+486|// 禁用窗口关闭按钮
+487|static void disableCloseButton(HWND hwnd) {
+488|    HMENU hmenu = GetSystemMenu(hwnd, FALSE);
+489|    if (hmenu) {
+490|        EnableMenuItem(hmenu, SC_CLOSE, MF_BYCOMMAND | MF_GRAYED);
+491|        DrawMenuBar(hwnd);
+492|    }
+493|}
+494|static void setBottomText(HWND hwnd, const std::wstring& s) {
+495|    SetDlgItemTextW(hwnd, IDC_BOTTOM_LBL, s.c_str());
+496|}
+497|static HWND g_hMain = nullptr;
+498|static HWND g_hLogin = nullptr;
+499|static bool g_loggedIn = false;
+500|
+501|// ============================================================
+502|// 主窗口：刷新车次列表
+503|// ============================================================
+504|static void refreshTrains(HWND hwnd) {
+505|    Resp r = callServer("\"GetActiveTrains\"");
+506|    HWND list = GetDlgItem(hwnd, IDC_TRAIN_LIST);
+507|    ListView_DeleteAllItems(list);
+508|    std::string v;
+509|    std::string raw = r.raw;
+510|    // 用 parseTrains 解析
+511|    size_t pp = raw.find("\"trains\"");
+512|    if (pp == std::string::npos) { setBottomText(hwnd, L"车次列表获取失败"); return; }
+513|    std::vector<Train> trains = parseTrains(raw);
+514|    int i = 0;
+515|    for (auto& t : trains) {
+516|        LVITEMW it = {0};
+517|        it.mask = LVIF_TEXT;
+518|        it.iItem = i;
+519|        it.pszText = const_cast<LPWSTR>(t.num.c_str());
+520|        ListView_InsertItem(list, &it);

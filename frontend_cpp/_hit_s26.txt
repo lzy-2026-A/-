@@ -1,0 +1,186 @@
+TOTAL=1782
+==== PostQuitMessage ====
+1214:PostQuitMessage(0);
+1232:if (!g_isLogout) PostQuitMessage(0);
+1333:PostQuitMessage(0); // 让 splash 消息循环退出，继续创建登录窗口
+1610:PostQuitMessage(0);
+==== DestroyWindow ====
+108:if (id == IDC_MB_OK) { g_mbResult = IDOK; DestroyWindow(hwnd); }
+109:else if (id == IDC_MB_NO) { g_mbResult = IDCANCEL; DestroyWindow(hwnd); }
+112:case WM_CLOSE: { g_mbResult = IDCANCEL; DestroyWindow(hwnd); return 0; }
+1332:DestroyWindow(hwnd);
+1609:DestroyWindow(hwnd);
+1774:if (g_hMain && IsWindow(g_hMain)) DestroyWindow(g_hMain);
+1775:if (g_hLogin && IsWindow(g_hLogin)) DestroyWindow(g_hLogin);
+==== ShowLoginWindow ====
+739:static void ShowLoginWindow() {
+1205:ShowLoginWindow();
+==== ShowMainWindow ====
+748:static void ShowMainWindow() {
+1595:ShowMainWindow();
+==== IDC_BTN_LOGOUT ====
+440:#define IDC_BTN_LOGOUT   2801
+735:MoveWindow(GetDlgItem(hwnd, IDC_BTN_LOGOUT), W - 220, H - bottomH + 2, 100, 32, TRUE);
+928:CreateWindowExW(0, L"BUTTON", L"退出登录", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 770, 0, 100, 30, hwnd, (HMENU)IDC_BTN_LOGOUT, nullptr, nullptr);
+1202:case IDC_BTN_LOGOUT: {
+==== IDC_BTN_EXIT ====
+441:#define IDC_BTN_EXIT     2802
+736:MoveWindow(GetDlgItem(hwnd, IDC_BTN_EXIT), W - 110, H - bottomH + 2, 100, 32, TRUE);
+929:CreateWindowExW(0, L"BUTTON", L"关闭系统", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 880, 0, 100, 30, hwnd, (HMENU)IDC_BTN_EXIT, nullptr, nullptr);
+1208:case IDC_BTN_EXIT: {
+1462:CreateWindowExW(0, L"BUTTON", L"退  出", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 348, 260, 34, hwnd, (HMENU)IDC_BTN_EXIT, nullptr, nullptr);
+1547:} else if (dis->CtlID == IDC_BTN_EXIT) {
+1607:} else if (id == IDC_BTN_EXIT) {
+==== g_isLogout ====
+452:static bool g_isLogout = false;
+1204:g_isLogout = true;
+1210:g_isLogout = false;
+1232:if (!g_isLogout) PostQuitMessage(0);
+1742:g_isLogout = false;
+==== g_hLogin ====
+498:static HWND g_hLogin = nullptr;
+742:if (g_hLogin && IsWindow(g_hLogin)) {
+743:ShowWindow(g_hLogin, SW_SHOW);
+744:SetForegroundWindow(g_hLogin);
+750:if (g_hLogin && IsWindow(g_hLogin)) ShowWindow(g_hLogin, SW_HIDE);
+1346:// g_hLogin / g_loggedIn 已在文件前部统一定义
+1360:static HBRUSH g_hLoginBg = nullptr;
+1361:static HBRUSH g_hLoginLeftBg = nullptr;
+1362:static HBRUSH g_hLoginEditBg = nullptr;
+1421:g_hLogin = hwnd;
+1422:g_hLoginBg = CreateSolidBrush(LOGIN_BG_RIGHT);
+1423:g_hLoginLeftBg = CreateSolidBrush(LOGIN_BG_LEFT);
+1424:g_hLoginEditBg = CreateSolidBrush(LOGIN_EDIT_BG);
+1490:FillRect((HDC)wp, &rc, g_hLoginBg);
+1493:FillRect((HDC)wp, &leftRc, g_hLoginLeftBg);
+1562:return (LRESULT)g_hLoginLeftBg;
+1566:return (LRESULT)g_hLoginBg;
+1573:return (LRESULT)g_hLoginEditBg;
+1617:if (g_hLoginBg) DeleteObject(g_hLoginBg);
+1618:if (g_hLoginLeftBg) DeleteObject(g_hLoginLeftBg);
+1619:if (g_hLoginEditBg) DeleteObject(g_hLoginEditBg);
+1621:g_hLogin = nullptr;
+1747:g_hLogin = login;
+1775:if (g_hLogin && IsWindow(g_hLogin)) DestroyWindow(g_hLogin);
+==== CreateWindowExW ====
+50:HWND st = CreateWindowExW(0, L"STATIC", text,
+55:HWND btnYes = CreateWindowExW(0, L"BUTTON", L"确  定",
+58:HWND btnNo = CreateWindowExW(0, L"BUTTON", L"取  消",
+133:HWND mb = CreateWindowExW(WS_EX_DLGMODALFRAME, L"CustomMsgBox", caption,
+777:CreateWindowExW(0, L"STATIC", L"智慧车站广播调度系统",
+781:CreateWindowExW(0, L"STATIC", L"调度中心",
+785:CreateWindowExW(0, L"STATIC", L"",
+789:CreateWindowExW(0, L"BUTTON", L"广播管理",
+793:CreateWindowExW(0, L"BUTTON", L"车辆管理",
+797:CreateWindowExW(0, L"BUTTON", L"车站大屏",
+801:CreateWindowExW(0, L"BUTTON", L"系统设置",
+805:CreateWindowExW(0, L"BUTTON", L"广播设置",
+810:CreateWindowExW(0, L"STATIC", L"",
+813:HWND list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+831:CreateWindowExW(0, L"STATIC", L"车次号：", WS_CHILD|WS_VISIBLE, 20, 340, 60, 22, panel1, nullptr, nullptr, nullptr);
+832:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 338, 80, 24, panel1, (HMENU)IDC_NUM, nullptr, nullptr);
+833:CreateWindowExW(0, L"STATIC", L"始发站：", WS_CHILD|WS_VISIBLE, 210, 340, 60, 22, panel1, nullptr, nullptr, nullptr);
+834:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 270, 338, 90, 24, panel1, (HMENU)IDC_DEP, nullptr, nullptr);
+835:CreateWindowExW(0, L"STATIC", L"到达站：", WS_CHILD|WS_VISIBLE, 380, 340, 60, 22, panel1, nullptr, nullptr, nullptr);
+836:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 440, 338, 90, 24, panel1, (HMENU)IDC_ARR, nullptr, nullptr);
+838:CreateWindowExW(0, L"STATIC", L"发车时间：", WS_CHILD|WS_VISIBLE, 20, 372, 60, 22, panel1, nullptr, nullptr, nullptr);
+839:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 370, 80, 24, panel1, (HMENU)IDC_DEPT, nullptr, nullptr);
+840:CreateWindowExW(0, L"STATIC", L"站台：", WS_CHILD|WS_VISIBLE, 210, 372, 60, 22, panel1, nullptr, nullptr, nullptr);
+841:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 250, 370, 40, 24, panel1, (HMENU)IDC_PLAT, nullptr, nullptr);
+842:CreateWindowExW(0, L"STATIC", L"状态：", WS_CHILD|WS_VISIBLE, 320, 372, 60, 22, panel1, nullptr, nullptr, nullptr);
+843:HWND cmb = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST, 360, 370, 110, 180, panel1, (HMENU)IDC_STATUS_CMB, nullptr, nullptr);
+847:CreateWindowExW(0, L"BUTTON", L"添加", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 20, 410, 80, 28, panel1, (HMENU)IDC_ADD, nullptr, nullptr);
+848:CreateWindowExW(0, L"BUTTON", L"更新选中状态", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 105, 410, 110, 28, panel1, (HMENU)IDC_UPD, nullptr, nullptr);
+849:CreateWindowExW(0, L"BUTTON", L"移除选中", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 220, 410, 90, 28, panel1, (HMENU)IDC_DEL, nullptr, nullptr);
+850:CreateWindowExW(0, L"BUTTON", L"刷新", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 315, 410, 80, 28, panel1, (HMENU)IDC_REFRESH, nullptr, nullptr);
+853:CreateWindowExW(0, L"STATIC", L"",
+858:CreateWindowExW(0, L"BUTTON", L"候车室广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 20, 20, 110, 35, panel2, (HMENU)IDC_PB_WAITING, nullptr, nullptr);
+859:CreateWindowExW(0, L"BUTTON", L"检票口广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 140, 20, 110, 35, panel2, (HMENU)IDC_PB_CHECKIN, nullptr, nullptr);
+860:CreateWindowExW(0, L"BUTTON", L"站台广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 260, 20, 110, 35, panel2, (HMENU)IDC_PB_PLATFORM, nullptr, nullptr);
+861:CreateWindowExW(0, L"BUTTON", L"股道广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 380, 20, 110, 35, panel2, (HMENU)IDC_PB_TRACK, nullptr, nullptr);
+862:CreateWindowExW(0, L"BUTTON", L"行车广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 500, 20, 110, 35, panel2, (HMENU)IDC_PB_TRAFFIC, nullptr, nullptr);
+863:CreateWindowExW(0, L"BUTTON", L"晚点广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 620, 20, 110, 35, panel2, (HMENU)IDC_PB_DELAY2, nullptr, nullptr);
+864:CreateWindowExW(0, L"BUTTON", L"停运广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 20, 65, 110, 35, panel2, (HMENU)IDC_PB_CANCEL, nullptr, nullptr);
+865:CreateWindowExW(0, L"BUTTON", L"提示音",   WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 140, 65, 110, 35, panel2, (HMENU)IDC_PB_CHIME, nullptr, nullptr);
+867:CreateWindowExW(0, L"STATIC", L"类型：", WS_CHILD|WS_VISIBLE, 20, 118, 50, 22, panel2, (HMENU)IDC_LBL_BTYPE, nullptr, nullptr);
+868:HWND bt = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD|WS_VISIBLE|CBS_DROPDOWNLIST, 70, 116, 120, 180, panel2, (HMENU)IDC_BTYPE_CMB, nullptr, nullptr);
+872:CreateWindowExW(0, L"STATIC", L"优先级：", WS_CHILD|WS_VISIBLE, 210, 118, 55, 22, panel2, (HMENU)IDC_LBL_PRI, nullptr, nullptr);
+873:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"5", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|ES_NUMBER, 270, 116, 40, 24, panel2, (HMENU)IDC_PRI, nullptr, nullptr);
+875:CreateWindowExW(0, L"STATIC", L"内容：", WS_CHILD|WS_VISIBLE, 20, 158, 50, 22, panel2, (HMENU)IDC_LBL_MSG, nullptr, nullptr);
+876:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 70, 156, 600, 24, panel2, (HMENU)IDC_MSG, nullptr, nullptr);
+877:CreateWindowExW(0, L"BUTTON", L"发送广播", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 690, 154, 100, 28, panel2, (HMENU)IDC_SEND, nullptr, nullptr);
+879:CreateWindowExW(0, L"STATIC", L"音频文件：", WS_CHILD|WS_VISIBLE, 20, 206, 70, 22, panel2, (HMENU)IDC_LBL_AUDIO, nullptr, nullptr);
+880:CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 204, 390, 24, panel2, (HMENU)IDC_AUDIO_FILE, nullptr, nullptr);
+881:CreateWindowExW(0, L"BUTTON", L"播放", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 202, 80, 28, panel2, (HMENU)IDC_PLAY, nullptr, nullptr);
+882:CreateWindowExW(0, L"BUTTON", L"停止", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 580, 202, 80, 28, panel2, (HMENU)IDC_STOP, nullptr, nullptr);
+883:CreateWindowExW(0, L"BUTTON", L"暂停", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 670, 202, 80, 28, panel2, (HMENU)IDC_PAUSE, nullptr, nullptr);
+884:CreateWindowExW(0, L"BUTTON", L"恢复", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 760, 202, 80, 28, panel2, (HMENU)IDC_RESUME, nullptr, nullptr);
+887:CreateWindowExW(0, L"STATIC", L"音量：", WS_CHILD|WS_VISIBLE, 20, 256, 50, 22, panel2, (HMENU)IDC_LBL_VOL, nullptr, nullptr);
+888:HWND hVolSlider = CreateWindowExW(0, TRACKBAR_CLASSW, L"",
+896:CreateWindowExW(0, L"STATIC", L"80%", WS_CHILD|WS_VISIBLE|SS_CENTER,
+899:CreateWindowExW(0, L"BUTTON", L"设置音量", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW,
+903:CreateWindowExW(0, L"STATIC", L"",
+906:CreateWindowExW(0, L"STATIC", L"车站大屏 - 待开发",
+910:CreateWindowExW(0, L"STATIC", L"",
+913:CreateWindowExW(0, L"BUTTON", L"自动广播模式", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 20, 20, 120, 24, panel3, (HMENU)IDC_AUTO_CHK, nullptr, nullptr);
+915:CreateWindowExW(0, L"STATIC", L"队列：-", WS_CHILD|WS_VISIBLE, 20, 60, 400, 22, panel3, (HMENU)IDC_QUEUE_LBL, nullptr, nullptr);
+916:CreateWindowExW(0, L"STATIC", L"音频：-", WS_CHILD|WS_VISIBLE, 20, 90, 400, 22, panel3, (HMENU)IDC_AUDIO_LBL, nullptr, nullptr);
+917:CreateWindowExW(0, L"STATIC", L"系统：-", WS_CHILD|WS_VISIBLE, 20, 120, 400, 22, panel3, (HMENU)IDC_SYS_LBL, nullptr, nullptr);
+920:CreateWindowExW(0, L"STATIC", L"",
+923:CreateWindowExW(0, L"STATIC", L"广播设置 - 待开发",
+927:CreateWindowExW(0, L"STATIC", L"就绪", WS_CHILD|WS_VISIBLE|SS_SUNKEN, 10, 0, 600, 24, hwnd, (HMENU)IDC_BOTTOM_LBL, nullptr, nullptr);
+928:CreateWindowExW(0, L"BUTTON", L"退出登录", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 770, 0, 100, 30, hwnd, (HMENU)IDC_BTN_LOGOUT, nullptr, nullptr);
+929:CreateWindowExW(0, L"BUTTON", L"关闭系统", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 880, 0, 100, 30, hwnd, (HMENU)IDC_BTN_EXIT, nullptr, nullptr);
+1438:HWND t = CreateWindowExW(0, L"STATIC", L"统一身份认证",
+1443:CreateWindowExW(0, L"STATIC", L"登录账号", WS_CHILD|WS_VISIBLE, 490, 115, 100, 20, hwnd, nullptr, nullptr, nullptr);
+1444:HWND u = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 490, 140, 260, 28, hwnd, (HMENU)IDC_USER, nullptr, nullptr);
+1448:CreateWindowExW(0, L"STATIC", L"登录密码", WS_CHILD|WS_VISIBLE, 490, 185, 100, 20, hwnd, nullptr, nullptr, nullptr);
+1449:HWND p = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|ES_PASSWORD, 490, 210, 260, 28, hwnd, (HMENU)IDC_PWD, nullptr, nullptr);
+1453:CreateWindowExW(0, L"BUTTON", L"记住账号", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 490, 255, 90, 22, hwnd, (HMENU)IDC_CHK_REMEMBER_USER, nullptr, nullptr);
+1455:CreateWindowExW(0, L"BUTTON", L"记住密码", WS_CHILD|WS_VISIBLE|BS_AUTOCHECKBOX, 585, 255, 90, 22, hwnd, (HMENU)IDC_CHK_REMEMBER_PWD, nullptr, nullptr);
+1457:HWND link = CreateWindowExW(0, L"STATIC", L"注册账号", WS_CHILD|WS_VISIBLE|SS_NOTIFY, 690, 255, 60, 22, hwnd, (HMENU)IDC_LINK_REG, nullptr, nullptr);
+1461:CreateWindowExW(0, L"BUTTON", L"登  录", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 295, 260, 38, hwnd, (HMENU)IDC_BTN_LOGIN, nullptr, nullptr);
+1462:CreateWindowExW(0, L"BUTTON", L"退  出", WS_CHILD|WS_VISIBLE|BS_OWNERDRAW, 490, 348, 260, 34, hwnd, (HMENU)IDC_BTN_EXIT, nullptr, nullptr);
+1464:CreateWindowExW(0, L"STATIC", L"V26.9.25", WS_CHILD|WS_VISIBLE|SS_RIGHT, 650, 460, 100, 18, hwnd, nullptr, nullptr, nullptr);
+1704:HWND splash = CreateWindowExW(0, L"SplashWin", L"",
+1744:HWND login = CreateWindowExW(0, L"LoginWin", L"",
+1754:HWND main = CreateWindowExW(0, L"MainWin", L"火车站广播调度系统 - 主控制台",
+==== GetMessageW ====
+1709:while (GetMessageW(&sm, nullptr, 0, 0)) {
+1768:while (GetMessageW(&msg, nullptr, 0, 0)) {
+==== PeekMessageW ====
+145:while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+==== LoginWin ====
+739:static void ShowLoginWindow() {
+1205:ShowLoginWindow();
+1722:lc.lpszClassName = L"LoginWin";
+1723:if (!GetClassInfoW(hInst, L"LoginWin", &lc)) {
+1744:HWND login = CreateWindowExW(0, L"LoginWin", L"",
+==== customMessageBoxW ====
+23:static int customMessageBoxW(HWND parent, const wchar_t* text, const wchar_t* caption, UINT type);
+122:static int customMessageBoxW(HWND parent, const wchar_t* text, const wchar_t* caption, UINT type) {
+1103:if (num.empty()) { customMessageBoxW(hwnd, L"请输入车次号", L"提示", MB_OK); break; }
+1119:if (sel < 0) { customMessageBoxW(hwnd, L"请先选择一列车次", L"提示", MB_OK); break; }
+1131:if (sel < 0) { customMessageBoxW(hwnd, L"请先选择一列车次", L"提示", MB_OK); break; }
+1134:if (customMessageBoxW(hwnd, (std::wstring(L"确定移除车次 ") + buf + L"？").c_str(), L"确认", MB_YESNO) != IDOK) break;
+1156:if (msg.empty()) { customMessageBoxW(hwnd, L"请输入广播内容", L"提示", MB_OK); break; }
+1169:if (f.empty()) { customMessageBoxW(hwnd, L"请输入音频文件名", L"提示", MB_OK); break; }
+1203:if (customMessageBoxW(hwnd, L"确定退出登录并返回登录窗口？", L"确认", MB_YESNO) != IDOK) break;
+1209:if (customMessageBoxW(hwnd, L"确定关闭整个系统并停止后端？", L"确认", MB_YESNO) != IDOK) break;
+1580:if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请输入账号和密码", L"提示", MB_OK); break; }
+1597:customMessageBoxW(hwnd, r.msg.c_str(), L"登录失败", MB_OK);
+1602:if (u.empty() || p.empty()) { customMessageBoxW(hwnd, L"请先输入要注册的账号和密码", L"提示", MB_OK); break; }
+1605:if (r.ok) customMessageBoxW(hwnd, L"注册成功，请点登录", L"成功", MB_OK);
+1606:else customMessageBoxW(hwnd, r.msg.c_str(), L"注册失败", MB_OK);
+1608:if (customMessageBoxW(hwnd, L"确定退出系统？", L"确认", MB_YESNO) == IDOK) {
+==== g_hLoginBg ====
+1360:static HBRUSH g_hLoginBg = nullptr;
+1422:g_hLoginBg = CreateSolidBrush(LOGIN_BG_RIGHT);
+1490:FillRect((HDC)wp, &rc, g_hLoginBg);
+1566:return (LRESULT)g_hLoginBg;
+1617:if (g_hLoginBg) DeleteObject(g_hLoginBg);
+==== g_fLoginBtn ====
+1363:static HFONT g_fLoginBtn = nullptr;
+1411:if (g_fLoginBtn) SelectObject(hdc, g_fLoginBtn);
+1432:g_fLoginBtn = CreateFontW(14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+1620:if (g_fLoginBtn) DeleteObject(g_fLoginBtn);

@@ -1,0 +1,18 @@
+﻿=== 开发目录 ico ===
+
+Name                           Length
+----                           ------
+CustomTkinter_icon_Windows.ico  26951
+
+
+
+=== 发布包 ico ===
+
+Name                           Length
+----                           ------
+CustomTkinter_icon_Windows.ico  26951
+
+
+
+=== 只读备份 ico ===
+

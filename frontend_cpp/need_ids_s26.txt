@@ -1,0 +1,112 @@
+MARK_need_ids_s26.txt START=250 END=360 TOTAL=1782
+250|    while ((pos = arr.find('{', pos)) != std::string::npos) {
+251|        size_t end = arr.find('}', pos);
+252|        if (end == std::string::npos) break;
+253|        std::string obj = arr.substr(pos, end - pos);
+254|        Train t;
+255|        std::string v;
+256|        if (jsonGetString(obj, "train_number", v)) t.num = utf8ToWide(v);
+257|        if (jsonGetString(obj, "departure_station", v)) t.dep = utf8ToWide(v);
+258|        if (jsonGetString(obj, "arrival_station", v)) t.arr = utf8ToWide(v);
+259|        if (jsonGetString(obj, "departure_time", v)) t.deptime = utf8ToWide(v);
+260|        if (jsonGetString(obj, "platform", v)) t.platform = utf8ToWide(v);
+261|        if (jsonGetString(obj, "status", v)) t.status = utf8ToWide(v);
+262|        trains.push_back(t);
+263|        pos = end + 1;
+264|    }
+265|    return trains;
+266|}
+267|
+268|// ============================================================
+269|// TCP 客户端
+270|// ============================================================
+271|static SOCKET g_sock = INVALID_SOCKET;
+272|static bool g_connected = false;
+273|
+274|static bool tcpConnect() {
+275|    WSADATA wsa;
+276|    WSAStartup(MAKEWORD(2, 2), &wsa);
+277|    sockaddr_in addr;
+278|    addr.sin_family = AF_INET;
+279|    addr.sin_port = htons(8888);
+280|    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+281|    // 重试最多 8 次（每次 500ms），等后端起来
+282|    for (int i = 0; i < 8; i++) {
+283|        g_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+284|        if (connect(g_sock, (sockaddr*)&addr, sizeof(addr)) != SOCKET_ERROR) {
+285|            DWORD rt = 6000;
+286|            setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rt, sizeof(rt));
+287|            g_connected = true;
+288|            return true;
+289|        }
+290|        closesocket(g_sock);
+291|        g_sock = INVALID_SOCKET;
+292|        Sleep(500);
+293|    }
+294|    g_connected = false;
+295|    return false;
+296|}
+297|
+298|// 获取项目根目录（exe 在 frontend_cpp\ 下，根目录是上级）
+299|static std::wstring GetAppRoot() {
+300|    wchar_t exePath[MAX_PATH] = {0};
+301|    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+302|    std::wstring dir(exePath);
+303|    size_t slash = dir.find_last_of(L"\\/");
+304|    if (slash != std::wstring::npos) dir = dir.substr(0, slash);
+305|    // dir = ...\frontend_cpp，根目录 = dir\..
+306|    return dir + L"\\..";
+307|}
+308|
+309|// 隐藏窗口拉起后端（不弹 cmd 黑窗）
+310|static void launchBackend() {
+311|    wchar_t exePath[MAX_PATH] = {0};
+312|    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+313|    std::wstring dir(exePath);
+314|    size_t slash = dir.find_last_of(L"\\/");
+315|    if (slash != std::wstring::npos) dir = dir.substr(0, slash);
+316|    std::vector<std::wstring> candidates = {
+317|        dir + L"\\..\\backend\\target\\debug\\train_broadcast_backend.exe",
+318|        dir + L"\\backend\\target\\debug\\train_broadcast_backend.exe",
+319|        L"backend\\target\\debug\\train_broadcast_backend.exe",
+320|    };
+321|    for (auto& path : candidates) {
+322|        DWORD attr = GetFileAttributesW(path.c_str());
+323|        if (attr != INVALID_FILE_ATTRIBUTES) {
+324|            // 规范化路径去掉 ..
+325|            wchar_t full[MAX_PATH] = {0};
+326|            GetFullPathNameW(path.c_str(), MAX_PATH, full, nullptr);
+327|            std::wstring wd = dir + L"\\..";
+328|            STARTUPINFOW si = { sizeof(si) };
+329|            PROCESS_INFORMATION pi = {0};
+330|            BOOL ok = CreateProcessW(full, nullptr, nullptr, nullptr, FALSE,
+331|                CREATE_NO_WINDOW, nullptr, wd.c_str(), &si, &pi);
+332|            if (ok) {
+333|                CloseHandle(pi.hProcess);
+334|                CloseHandle(pi.hThread);
+335|            }
+336|            return;
+337|        }
+338|    }
+339|}
+340|static void tcpClose() {
+341|    g_connected = false;
+342|    if (g_sock != INVALID_SOCKET) { closesocket(g_sock); g_sock = INVALID_SOCKET; }
+343|    WSACleanup();
+344|}
+345|// 发送 UTF-8 请求，返回 GBK 响应字节串（去除末尾 \n）
+346|static std::string tcpSend(const std::string& utf8Payload) {
+347|    if (!g_connected) {
+348|        if (!tcpConnect()) return "";
+349|    }
+350|    send(g_sock, utf8Payload.c_str(), (int)utf8Payload.size(), 0);
+351|    std::string buf;
+352|    char tmp[4096];
+353|    while (true) {
+354|        int n = recv(g_sock, tmp, sizeof(tmp), 0);
+355|        if (n <= 0) break;
+356|        buf.append(tmp, n);
+357|        if (buf.find('\n') != std::string::npos) break;
+358|    }
+359|    if (!buf.empty() && buf.back() == '\n') buf.pop_back();
+360|    return buf;

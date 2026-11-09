@@ -1,0 +1,99 @@
+==== IDC_PWD ====
+390:#define IDC_PWD 1002
+1449:        HWND p = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL|ES_PASSWORD, 490, 210, 260, 28, hwnd, (HMENU)IDC_PWD, nullptr, nullptr);
+1479:                SetDlgItemTextW(hwnd, IDC_PWD, pwdBuf);
+1579:            std::wstring p = getEditW(hwnd, IDC_PWD);
+1601:            std::wstring p = getEditW(hwnd, IDC_PWD);
+==== IDC_USER ====
+389:#define IDC_USER 1001
+1444:        HWND u = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 490, 140, 260, 28, hwnd, (HMENU)IDC_USER, nullptr, nullptr);
+1475:                SetDlgItemTextW(hwnd, IDC_USER, userBuf);
+1578:            std::wstring u = getEditW(hwnd, IDC_USER);
+1600:            std::wstring u = getEditW(hwnd, IDC_USER);
+==== IDC_REMEMBER ====
+==== LOGIN_BG ====
+1350:#define LOGIN_BG_RIGHT    RGB(26, 37, 64)    // 右侧深灰蓝
+1351:#define LOGIN_BG_LEFT     RGB(15, 22, 38)    // 左侧更深
+1385:    HBRUSH bgBr = CreateSolidBrush(LOGIN_BG_RIGHT);
+1422:        g_hLoginBg = CreateSolidBrush(LOGIN_BG_RIGHT);
+1423:        g_hLoginLeftBg = CreateSolidBrush(LOGIN_BG_LEFT);
+==== g_hLoginBg ====
+1360:static HBRUSH g_hLoginBg = nullptr;
+1422:        g_hLoginBg = CreateSolidBrush(LOGIN_BG_RIGHT);
+1490:        FillRect((HDC)wp, &rc, g_hLoginBg);
+1566:            return (LRESULT)g_hLoginBg;
+1617:        if (g_hLoginBg) DeleteObject(g_hLoginBg);
+==== g_fLoginBtn ====
+1363:static HFONT g_fLoginBtn = nullptr;
+1411:    if (g_fLoginBtn) SelectObject(hdc, g_fLoginBtn);
+1432:        g_fLoginBtn = CreateFontW(14, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+1620:        if (g_fLoginBtn) DeleteObject(g_fLoginBtn);
+==== GetAppRoot ====
+299:static std::wstring GetAppRoot() {
+956:            std::wstring root = GetAppRoot();
+1279:            std::wstring root = GetAppRoot();
+1468:            std::wstring cfg = GetAppRoot() + L"\\config.ini";
+1504:            std::wstring root = GetAppRoot();
+1587:                    std::wstring cfg = GetAppRoot() + L"\\config.ini";
+1632:    std::wstring root = GetAppRoot();
+==== disableCloseButton ====
+487:static void disableCloseButton(HWND hwnd) {
+935:        disableCloseButton(hwnd);
+1484:        disableCloseButton(hwnd);
+==== IDC_LBL_BTYPE ====
+442:#define IDC_LBL_BTYPE    2610
+705:        MoveWindow(GetDlgItem(hwnd, IDC_LBL_BTYPE), 20, formY, 50, 22, TRUE);
+867:        CreateWindowExW(0, L"STATIC", L"类型：", WS_CHILD|WS_VISIBLE, 20, 118, 50, 22, panel2, (HMENU)IDC_LBL_BTYPE, nullptr, nullptr);
+==== IDC_NUM ====
+395:#define IDC_NUM 2101
+671:        MoveWindow(GetDlgItem(hwnd, IDC_NUM), 90, fy, colW, 26, TRUE);
+832:        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 338, 80, 24, panel1, (HMENU)IDC_NUM, nullptr, nullptr);
+1102:            std::wstring num = getEditW(hwnd, IDC_NUM);
+==== IDC_DEP ====
+396:#define IDC_DEP 2102
+398:#define IDC_DEPT 2104
+672:        MoveWindow(GetDlgItem(hwnd, IDC_DEP), 90 + colW + 80, fy, colW, 26, TRUE);
+676:        MoveWindow(GetDlgItem(hwnd, IDC_DEPT), 90, fy2, colW, 26, TRUE);
+834:        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 270, 338, 90, 24, panel1, (HMENU)IDC_DEP, nullptr, nullptr);
+839:        CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 90, 370, 80, 24, panel1, (HMENU)IDC_DEPT, nullptr, nullptr);
+1104:            std::wstring dep = getEditW(hwnd, IDC_DEP);
+1106:            std::wstring dt = getEditW(hwnd, IDC_DEPT);
+==== IDC_PANEL_TRAIN ====
+464:#define IDC_PANEL_TRAIN 3202
+618:    ShowWindow(GetDlgItem(hwnd, IDC_PANEL_TRAIN), tab == 1 ? SW_SHOW : SW_HIDE);
+656:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_TRAIN), 15, contentY, panelW, panelH, TRUE);
+662:    HWND hPanelTrain = GetDlgItem(hwnd, IDC_PANEL_TRAIN);
+811:            WS_CHILD, 0, 0, 100, 100, hwnd, (HMENU)IDC_PANEL_TRAIN, nullptr, nullptr);
+814:            WS_CHILD|WS_VISIBLE|LVS_REPORT|LVS_SINGLESEL, 20, 20, 800, 300, GetDlgItem(hwnd, IDC_PANEL_TRAIN), (HMENU)IDC_TRAIN_LIST, nullptr, nullptr);
+830:        HWND panel1 = GetDlgItem(hwnd, IDC_PANEL_TRAIN);
+==== bottomH ====
+633:    int bottomH = 35;   // 底部状态栏高度
+635:    int contentH = H - contentY - bottomH;
+734:    MoveWindow(GetDlgItem(hwnd, IDC_BOTTOM_LBL), 15, H - bottomH + 5, W - 240, bottomH - 8, TRUE);
+735:    MoveWindow(GetDlgItem(hwnd, IDC_BTN_LOGOUT), W - 220, H - bottomH + 2, 100, 32, TRUE);
+736:    MoveWindow(GetDlgItem(hwnd, IDC_BTN_EXIT), W - 110, H - bottomH + 2, 100, 32, TRUE);
+==== formY ====
+704:        int formY = 118;
+705:        MoveWindow(GetDlgItem(hwnd, IDC_LBL_BTYPE), 20, formY, 50, 22, TRUE);
+706:        MoveWindow(GetDlgItem(hwnd, IDC_BTYPE_CMB), 70, formY - 2, 120, 180, TRUE);
+707:        MoveWindow(GetDlgItem(hwnd, IDC_LBL_PRI), 210, formY, 55, 22, TRUE);
+708:        MoveWindow(GetDlgItem(hwnd, IDC_PRI), 270, formY - 2, 40, 24, TRUE);
+==== panelW ====
+653:    int panelW = W - 30;
+655:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_BROADCAST), 15, contentY, panelW, panelH, TRUE);
+656:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_TRAIN), 15, contentY, panelW, panelH, TRUE);
+657:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_SCREEN), 15, contentY, panelW, panelH, TRUE);
+658:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_SYSTEM), 15, contentY, panelW, panelH, TRUE);
+659:    MoveWindow(GetDlgItem(hwnd, IDC_PANEL_BROADCAST_SET), 15, contentY, panelW, panelH, TRUE);
+665:        int listW = panelW - 40;
+691:        int ctrlW = min(120, (panelW - 100) / 6);
+713:        MoveWindow(GetDlgItem(hwnd, IDC_MSG), 70, msgY - 2, panelW - 200, 26, TRUE);
+714:        MoveWindow(GetDlgItem(hwnd, IDC_SEND), panelW - 120, msgY - 4, 100, 28, TRUE);
+719:        MoveWindow(GetDlgItem(hwnd, IDC_AUDIO_FILE), 90, audioY - 2, panelW - 430, 26, TRUE);
+720:        MoveWindow(GetDlgItem(hwnd, IDC_PLAY), panelW - 330, audioY - 4, 80, 28, TRUE);
+721:        MoveWindow(GetDlgItem(hwnd, IDC_STOP), panelW - 240, audioY - 4, 80, 28, TRUE);
+722:        MoveWindow(GetDlgItem(hwnd, IDC_PAUSE), panelW - 150, audioY - 4, 80, 28, TRUE);
+723:        MoveWindow(GetDlgItem(hwnd, IDC_RESUME), panelW - 60, audioY - 4, 50, 28, TRUE);
+728:        MoveWindow(GetDlgItem(hwnd, IDC_VOL_SLIDER), 70, volY - 4, min(350, panelW - 320), 28, TRUE);
+729:        MoveWindow(GetDlgItem(hwnd, IDC_VOL_LABEL), 70 + min(350, panelW - 320) + 10, volY, 45, 26, TRUE);
+730:        MoveWindow(GetDlgItem(hwnd, IDC_SETVOL), panelW - 140, volY - 2, 110, 32, TRUE);

@@ -1,0 +1,182 @@
+MARK_s26_mb2.txt START=180 END=360 TOTAL=1782
+180|    MultiByteToWideChar(936, 0, s.c_str(), (int)s.size(), &out[0], n);
+181|    return out;
+182|}
+183|static std::wstring trimW(const std::wstring& s) {
+184|    size_t a = s.find_first_not_of(L" \t\r\n");
+185|    size_t b = s.find_last_not_of(L" \t\r\n");
+186|    return a == std::wstring::npos ? L"" : s.substr(a, b - a + 1);
+187|}
+188|
+189|// ============================================================
+190|// 简单 JSON 字段提取（针对本系统固定响应结构）
+191|// ============================================================
+192|// 在 json 中找 "key":"value"，返回 value（已去引号、已转义还原简单）
+193|static bool jsonGetString(const std::string& json, const std::string& key, std::string& out) {
+194|    std::string pat = "\"" + key + "\"";
+195|    size_t p = json.find(pat);
+196|    if (p == std::string::npos) return false;
+197|    p = json.find(':', p + pat.size());
+198|    if (p == std::string::npos) return false;
+199|    p = json.find('"', p);
+200|    if (p == std::string::npos) return false;
+201|    size_t e = p + 1;
+202|    while (e < json.size()) {
+203|        if (json[e] == '\\' && e + 1 < json.size()) { e += 2; continue; }
+204|        if (json[e] == '"') break;
+205|        e++;
+206|    }
+207|    out = json.substr(p + 1, e - p - 1);
+208|    return true;
+209|}
+210|static bool jsonGetBool(const std::string& json, const std::string& key, bool& out) {
+211|    std::string pat = "\"" + key + "\"";
+212|    size_t p = json.find(pat);
+213|    if (p == std::string::npos) return false;
+214|    p = json.find(':', p + pat.size());
+215|    if (p == std::string::npos) return false;
+216|    p++;
+217|    while (p < json.size() && (json[p] == ' ' || json[p] == '\t')) p++;
+218|    if (p + 3 < json.size() && json[p] == 't') { out = true; return true; }
+219|    out = false; return true;
+220|}
+221|static bool jsonGetInt(const std::string& json, const std::string& key, int& out) {
+222|    std::string pat = "\"" + key + "\"";
+223|    size_t p = json.find(pat);
+224|    if (p == std::string::npos) return false;
+225|    p = json.find(':', p + pat.size());
+226|    if (p == std::string::npos) return false;
+227|    p++;
+228|    while (p < json.size() && (json[p] == ' ' || json[p] == '\t' || json[p] == '-')) p++;
+229|    int v = 0; bool neg = false;
+230|    if (p > 0 && json[p-1] == '-') neg = true;
+231|    while (p < json.size() && json[p] >= '0' && json[p] <= '9') { v = v * 10 + (json[p] - '0'); p++; }
+232|    out = neg ? -v : v;
+233|    return true;
+234|}
+235|
+236|// 解析车次列表 ActiveTrains
+237|struct Train {
+238|    std::wstring num, dep, arr, deptime, platform, status;
+239|};
+240|static std::vector<Train> parseTrains(const std::string& json) {
+241|    std::vector<Train> trains;
+242|    size_t p = json.find("\"trains\"");
+243|    if (p == std::string::npos) return trains;
+244|    p = json.find('[', p);
+245|    if (p == std::string::npos) return trains;
+246|    size_t e = json.find(']', p);
+247|    std::string arr = json.substr(p, e - p);
+248|    // 按 { 切分每个对象
+249|    size_t pos = 0;
+250|    while ((pos = arr.find('{', pos)) != std::string::npos) {
+251|        size_t end = arr.find('}', pos);
+252|        if (end == std::string::npos) break;
+253|        std::string obj = arr.substr(pos, end - pos);
+254|        Train t;
+255|        std::string v;
+256|        if (jsonGetString(obj, "train_number", v)) t.num = utf8ToWide(v);
+257|        if (jsonGetString(obj, "departure_station", v)) t.dep = utf8ToWide(v);
+258|        if (jsonGetString(obj, "arrival_station", v)) t.arr = utf8ToWide(v);
+259|        if (jsonGetString(obj, "departure_time", v)) t.deptime = utf8ToWide(v);
+260|        if (jsonGetString(obj, "platform", v)) t.platform = utf8ToWide(v);
+261|        if (jsonGetString(obj, "status", v)) t.status = utf8ToWide(v);
+262|        trains.push_back(t);
+263|        pos = end + 1;
+264|    }
+265|    return trains;
+266|}
+267|
+268|// ============================================================
+269|// TCP 客户端
+270|// ============================================================
+271|static SOCKET g_sock = INVALID_SOCKET;
+272|static bool g_connected = false;
+273|
+274|static bool tcpConnect() {
+275|    WSADATA wsa;
+276|    WSAStartup(MAKEWORD(2, 2), &wsa);
+277|    sockaddr_in addr;
+278|    addr.sin_family = AF_INET;
+279|    addr.sin_port = htons(8888);
+280|    inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
+281|    // 重试最多 8 次（每次 500ms），等后端起来
+282|    for (int i = 0; i < 8; i++) {
+283|        g_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+284|        if (connect(g_sock, (sockaddr*)&addr, sizeof(addr)) != SOCKET_ERROR) {
+285|            DWORD rt = 6000;
+286|            setsockopt(g_sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rt, sizeof(rt));
+287|            g_connected = true;
+288|            return true;
+289|        }
+290|        closesocket(g_sock);
+291|        g_sock = INVALID_SOCKET;
+292|        Sleep(500);
+293|    }
+294|    g_connected = false;
+295|    return false;
+296|}
+297|
+298|// 获取项目根目录（exe 在 frontend_cpp\ 下，根目录是上级）
+299|static std::wstring GetAppRoot() {
+300|    wchar_t exePath[MAX_PATH] = {0};
+301|    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+302|    std::wstring dir(exePath);
+303|    size_t slash = dir.find_last_of(L"\\/");
+304|    if (slash != std::wstring::npos) dir = dir.substr(0, slash);
+305|    // dir = ...\frontend_cpp，根目录 = dir\..
+306|    return dir + L"\\..";
+307|}
+308|
+309|// 隐藏窗口拉起后端（不弹 cmd 黑窗）
+310|static void launchBackend() {
+311|    wchar_t exePath[MAX_PATH] = {0};
+312|    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+313|    std::wstring dir(exePath);
+314|    size_t slash = dir.find_last_of(L"\\/");
+315|    if (slash != std::wstring::npos) dir = dir.substr(0, slash);
+316|    std::vector<std::wstring> candidates = {
+317|        dir + L"\\..\\backend\\target\\debug\\train_broadcast_backend.exe",
+318|        dir + L"\\backend\\target\\debug\\train_broadcast_backend.exe",
+319|        L"backend\\target\\debug\\train_broadcast_backend.exe",
+320|    };
+321|    for (auto& path : candidates) {
+322|        DWORD attr = GetFileAttributesW(path.c_str());
+323|        if (attr != INVALID_FILE_ATTRIBUTES) {
+324|            // 规范化路径去掉 ..
+325|            wchar_t full[MAX_PATH] = {0};
+326|            GetFullPathNameW(path.c_str(), MAX_PATH, full, nullptr);
+327|            std::wstring wd = dir + L"\\..";
+328|            STARTUPINFOW si = { sizeof(si) };
+329|            PROCESS_INFORMATION pi = {0};
+330|            BOOL ok = CreateProcessW(full, nullptr, nullptr, nullptr, FALSE,
+331|                CREATE_NO_WINDOW, nullptr, wd.c_str(), &si, &pi);
+332|            if (ok) {
+333|                CloseHandle(pi.hProcess);
+334|                CloseHandle(pi.hThread);
+335|            }
+336|            return;
+337|        }
+338|    }
+339|}
+340|static void tcpClose() {
+341|    g_connected = false;
+342|    if (g_sock != INVALID_SOCKET) { closesocket(g_sock); g_sock = INVALID_SOCKET; }
+343|    WSACleanup();
+344|}
+345|// 发送 UTF-8 请求，返回 GBK 响应字节串（去除末尾 \n）
+346|static std::string tcpSend(const std::string& utf8Payload) {
+347|    if (!g_connected) {
+348|        if (!tcpConnect()) return "";
+349|    }
+350|    send(g_sock, utf8Payload.c_str(), (int)utf8Payload.size(), 0);
+351|    std::string buf;
+352|    char tmp[4096];
+353|    while (true) {
+354|        int n = recv(g_sock, tmp, sizeof(tmp), 0);
+355|        if (n <= 0) break;
+356|        buf.append(tmp, n);
+357|        if (buf.find('\n') != std::string::npos) break;
+358|    }
+359|    if (!buf.empty() && buf.back() == '\n') buf.pop_back();
+360|    return buf;

@@ -1,0 +1,13 @@
+﻿main.cpp
+main.cpp(603): warning C4005: 'MAIN_BG': macro redefinition
+main.cpp(589): note: see previous definition of 'MAIN_BG'
+main.cpp(606): warning C4005: 'MAIN_TEXT': macro redefinition
+main.cpp(590): note: see previous definition of 'MAIN_TEXT'
+main.cpp(615): warning C4005: 'MAIN_EDIT_BG': macro redefinition
+main.cpp(591): note: see previous definition of 'MAIN_EDIT_BG'
+main.cpp(1600): warning C4244: 'argument': conversion from 'LONG' to 'Gdiplus::REAL', possible loss of data
+main.cpp(1606): warning C4244: 'argument': conversion from 'LONG' to 'Gdiplus::REAL', possible loss of data
+main.cpp(1623): warning C4244: 'argument': conversion from 'int' to 'Gdiplus::REAL', possible loss of data
+main.cpp(1631): warning C4244: 'argument': conversion from 'int' to 'Gdiplus::REAL', possible loss of data
+main.cpp(1983): warning C4996: 'inet_addr': Use inet_pton() or InetPton() instead or define _WINSOCK_DEPRECATED_NO_WARNINGS to disable deprecated API warnings
+main.cpp(2121): warning C4102: 'cleanup': unreferenced label
