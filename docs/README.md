@@ -1,101 +1,287 @@
 # 旅客服务系统智能管理广播平台
 
-火车站广播调度系统
+版本：**V26.10.2**  
+类型：Windows 桌面端，纯 Python（CustomTkinter / tkinter）打包程序  
+运行方式：本地独立运行，不依赖 Rust 后端或 C++ 启动器
 
-## 项目结构
+---
 
+## 一、快速启动
+
+推荐直接双击：
+
+```text
+D:\旅客服务系统智能管理广播平台\旅客服务系统智能管理广播平台.exe
 ```
+
+也可以使用：
+
+```text
+D:\旅客服务系统智能管理广播平台\启动.bat
+D:\旅客服务系统智能管理广播平台\frontend_cpp\frontend.exe
+D:\旅客服务系统智能管理广播平台\dist\main_ui\main_ui.exe
+```
+
+以上入口当前指向同一个纯 Python 打包程序。
+
+> 单文件 exe 首次启动时需要解压运行库，可能会等待几秒，属于正常现象。  
+> 如果双击没有反应，请确认使用的是上面这些新文件，而不是以前遗留的旧快捷方式。
+
+---
+
+## 二、登录
+
+默认本地账号：
+
+```text
+账号：admin
+密码：123456
+```
+
+登录信息保存在项目根目录的 `config.ini`：
+
+```ini
+[login]
+remember_user = 1
+remember_pwd = 1
+username = admin
+password = 123456
+```
+
+- 勾选“记住密码”后，密码会写入本机 `config.ini`，请勿把该文件发给无关人员。
+- 当前版本为本地登录，不需要连接服务器。
+- 启动画面为纯文字，不显示图标；程序 exe、任务栏和主窗口带应用图标。
+
+---
+
+## 三、主界面
+
+登录成功后主界面会自动最大化，效果等同于点击 Windows 右上角的“最大化”按钮：
+
+- 保留标题栏
+- 保留最小化 / 最大化 / 关闭按钮
+- 保留底部任务栏
+- 窗口铺满工作区，不是 F11 全屏
+
+主界面左侧导航包含：
+
+1. 广播管理
+2. 广播队列
+3. 车辆管理
+4. 车站大屏
+5. 系统设置
+6. 广播设置
+
+---
+
+## 四、功能说明
+
+### 1. 广播管理
+
+- 显示今日车次列表：车次、类型、发站、到站、开点、检票口、站台、状态、到点。
+- 支持添加车次、删除车次、刷新、批量导入、停止播放。
+- 车次状态按业务颜色显示：
+  - 正在检票 / 检票中：绿色
+  - 停止检票 / 停运 / 晚点 / 取消：红色
+  - 待检票：浅蓝色
+  - 正在候车 / 计划中：黄色
+  - 已发车 / 已到达：灰色
+- 选中车次后，右侧可执行：
+  - 检票预告
+  - 开始检票
+  - 停止检票
+  - 列车晚点类紧急广播
+  - 列车停运类紧急广播
+  - 其他紧急广播
+
+### 2. 广播队列
+
+- 显示待播放队列、优先级、广播类型、车次、入队时间。
+- 支持上移、下移、移除选中、清空队列、按优先级排序。
+- 播放中的广播不会因为队列清空而中断。
+- 队列刷新为原地增量更新，不会整表闪烁。
+
+### 3. 车辆管理
+
+- 与广播管理使用同一份车次数据。
+- 支持添加、更新、移除车次。
+- 选中车次会自动回填详情。
+- 页面可见时每 10 秒自动同步一次；刷新为增量更新，保留当前选中项。
+
+### 4. 车站大屏
+
+- 高铁站电子屏风格，深蓝底、双语表头。
+- 按开车时间和状态自动更新。
+- 支持独立大屏窗口。
+- 状态颜色与广播管理保持一致。
+
+### 5. 系统设置
+
+包含自动广播、车站设置、全局设置等页面，可配置：
+
+- 车站名称
+- 停止检票提前分钟数
+- 车次排序方式
+- 定时广播
+- 其他运行参数
+
+定时广播到点后会自动触发对应广播，并在状态栏提示。
+
+### 6. 广播设置
+
+- 配置广播类型、广播步骤、开始音、结束音。
+- 步骤表显示音频文件的真实相对位置。
+- 音频文件缺失或无法打开时显示“点击添加文件”，不会把占位文字写回配置。
+- 支持调整步骤顺序、语速、试听和保存。
+
+---
+
+## 五、刷新机制
+
+当前刷新逻辑已经改为增量更新：
+
+- 车次数据没有变化时，不写任何表格单元格，也不刷新状态栏。
+- 只有内容真正变化时才更新对应行。
+- 不整表删除重建。
+- 不重建隐藏的车辆管理表和大屏。
+- 不按行号交替换底色，排序时不会整表闪一下。
+- 只有选中项真的变化时才重设选中，避免详情区重复加载。
+
+如果点击“刷新”后画面没有变化，说明数据本来就是最新的，这是正常行为。
+
+---
+
+## 六、目录与文件
+
+```text
 旅客服务系统智能管理广播平台/
-├── backend/                  Rust 后端（TCP 服务，端口 8888）
-│   ├── Cargo.toml
-│   └── src/
-│       ├── main.rs           程序入口：装配各模块并启动服务器
-│       ├── config.rs         配置模块（端口、音频目录、数据目录）
-│       ├── account.rs        账号管理（加盐哈希、注册/登录、持久化）
-│       ├── audio.rs          音频管理（播放/停止/暂停/恢复/音量/队列）
-│       ├── broadcast.rs      广播调度（车次状态机、自动/手动广播、优先级队列）
-│       └── communication.rs  前后端通信（JSON 协议、GBK/UTF-8 编码互通）
-├── frontend/                 易语言前端（备选，需易语言正版授权）
-│   ├── 启动窗口.e / 登录窗口.e / 注册窗口.e
-│   ├── 后端通信.e            后端通信类（WinSock TCP + JSON 解析封装）
-│   └── 主工控窗口.e          主控制台
-├── frontend_py/              **Python(tkinter) 前端（推荐，无需任何授权）**
-│   ├── main.py               程序入口（登录 -> 主控制台）
-│   ├── client.py             TCP 通信客户端（JSON/GBK 协议封装）
-│   ├── login_window.py       登录窗口
-│   ├── register_window.py    注册窗口
-│   └── main_window.py        主控制台（车次/广播/音频/状态）
-├── docs/                     文档
-├── audio/                    后端音频文件目录（可选，运行时自动创建）
-├── assets/                   资源
-└── images/                   前端图片（启动画面 startup.png 等）
+├── main_ui.py                 主程序源码（纯 Python）
+├── main_ui.spec               PyInstaller 打包配置
+├── version_info.txt           exe 版本信息
+├── config.ini                 登录配置
+├── trains.json                车次数据
+├── bcast_config.json          广播配置（类型、步骤、开始/结束音）
+├── system_config.json         系统设置
+├── bcast_log.json             广播记录
+├── 启动.bat                   启动脚本
+├── 旅客服务系统智能管理广播平台.exe   推荐启动程序
+├── audio/                     音频目录
+├── images/                    图片资源目录
+├── ico/                       应用图标
+├── docs/                      项目文档
+├── dist/
+│   └── main_ui/
+│       └── main_ui.exe        打包后的主程序
+└── frontend_cpp/
+    ├── main.cpp               旧 C++ 启动器源码（历史保留）
+    ├── build.bat              旧 C++ 编译脚本（历史保留）
+    └── frontend.exe           当前为纯 Python exe 副本，兼容旧快捷方式
 ```
 
-## 启动步骤
+说明：
 
-### 1. 启动后端（Rust）
+- `trains.json`、`bcast_config.json` 修改前会自动生成 `.bak` 备份。
+- `frontend_py/` 是早期基于后端通信的 Python 前端，当前主程序不依赖它。
+- `frontend_cpp/main.cpp` 是历史 C++ 启动器源码，当前发布版不使用 C++ 启动器。
 
-需要 Rust 工具链（rustup / cargo）。
+---
 
-```bash
-cd backend
-cargo build --release
-target\release\train_broadcast_backend.exe   # 或直接 cargo run --release
+## 七、音频文件
+
+把音频文件放在项目根目录的 `audio/` 下；如果使用语音包，可放在：
+
+```text
+audio/语音包/
 ```
 
-首次运行会自动创建配置文件与数据目录：
-- 配置：`%APPDATA%\train_broadcast_system\config.json`
-- 账号：`%APPDATA%\train_broadcast_system\accounts.json`
-- 音频：`%APPDATA%\train_broadcast_system\audio\`
-- 日志：`%APPDATA%\train_broadcast_system\server.log`（日志写入文件，避免无控制台时管道阻塞）
+广播设置中的步骤路径为相对 `audio/` 的路径，例如：
 
-服务器默认监听 `127.0.0.1:8888`。
-
-> 关闭系统：前端主控制台"关闭系统"按钮会发送 `Shutdown` 请求，后端正常退出（1 秒内）。
-
-### 2. 启动前端（Python，推荐）
-
-需要 Python 3（自带 tkinter，无需额外安装任何库）：
-
-```bash
-cd frontend_py
-python main.py
+```text
+检票\检票预告\1旅客们，你们好.mp3
 ```
 
-流程：登录窗口（可注册新账号）→ 主控制台。
+注意事项：
 
-> 主控制台**禁止直接点窗口右上角 X 关闭**，必须通过右下角【关闭系统】按钮退出；【退出登录】可返回登录窗口。
+- 路径中的中文和空格需要保持与实际文件一致。
+- 文件不存在或无法读取时，步骤表会显示“点击添加文件”，不会误改配置。
+- 音频缺失时广播仍可执行文字流程，但不会播放对应声音。
 
-## 通信协议
+---
 
-- 传输层：TCP（127.0.0.1:8888）
-- 消息格式：JSON，以换行符 `\n` 结尾（后端响应同样以 `\n` 定界）
-- 编码：前端（易语言）发送 ANSI/GBK，后端自动识别；后端响应转 GBK 发送，前端直接显示
-- 请求示例：
-  - 登录：`{"Login":{"username":"admin","password":"123456"}}`
-  - 添加车次：`{"AddTrain":{"train_number":"G123","departure_station":"北京南","arrival_station":"上海虹桥","departure_time":"08:00","platform":"3","status":"Scheduled"}}`
-  - 无参数请求（单元请求）直接发送字符串：`"GetQueueStatus"`、`"GetActiveTrains"`、`"StopAudio"`、`"Shutdown"` 等
-- 车次状态枚举：`Scheduled`（计划中）、`Boarding`（检票中）、`Delayed`（晚点）、`Departed`（已发车）、`Arrived`（已到达）、`Cancelled`（取消）
-- 广播类型枚举：`BoardingAnnouncement`、`DelayAnnouncement`、`SafetyReminder`、`WelcomeMessage`、`FarewellMessage`、`EmergencyNotice`、`PlatformChange`
+## 八、重新打包
 
-## 音频说明
+在项目根目录执行：
 
-自动/手动广播会触发音频播放。音频文件按文件名在音频目录中查找：
+```powershell
+python -m py_compile main_ui.py
+python -m PyInstaller --noconfirm --clean main_ui.spec
+```
 
-- 建议文件名：`welcome.mp3`、`boarding.mp3`、`boarding_start.mp3`、`delay.mp3`、`safety.mp3`、`departure.mp3`、`cancelled.mp3`
-- 主控制台"音频控制"输入文件名即可播放（后端自动拼接音频目录），也支持绝对路径
+打包输出：
 
-无音频文件时广播只记录文字内容，不报错。
+```text
+dist\main_ui.exe
+```
 
-## 开发说明
+复制到运行目录：
 
-- 后端编译：`cd backend && cargo build`（当前保留 4 个 warning，均为预留 API 与冗余导入，不影响运行）
-- 广播调度：后端每 1 秒处理一条广播队列（自动模式下）；车次状态变化自动生成对应广播
-- 安全：密码使用随机盐 + Base64 摘要存储，不保存明文
-- 端到端测试：`backend\test_protocol.py`（需先启动服务器），覆盖注册/登录/车次/广播/音频/关机等 18 项协议用例，结果写入 `protocol_test_result.txt`
+```powershell
+Copy-Item dist\main_ui.exe dist\main_ui\main_ui.exe -Force
+Copy-Item dist\main_ui.exe 旅客服务系统智能管理广播平台.exe -Force
+Copy-Item dist\main_ui.exe frontend_cpp\frontend.exe -Force
+```
 
-## 已知修复记录（2026-09-25）
+图标配置在 `main_ui.spec` 中：
 
-1. **账号保存死锁**：`save()` 内部再次获取 accounts 读锁，而调用方已持有写锁（parking_lot RwLock 不可重入）导致注册/登录卡死。修复为 `save(&self, accounts: &HashMap)` 接收数据引用。
-2. **日志阻塞冻结**：日志写 stdout 时，若 stdout 为无人消费的管道（Windows 匿名管道缓冲约 4KB），日志积满后写日志线程（广播循环、连接处理）全部阻塞，导致整个进程冻结。修复为日志写入 `server.log` 文件。
-3. **关闭不退出**：accept 循环阻塞在 `accept().await`，Shutdown 后进程不退出。修复为 accept 增加 500ms 超时轮询退出标志。
+```python
+icon=['ico/CustomTkinter_icon_Windows.ico']
+```
+
+---
+
+## 九、常见问题
+
+### 1. 双击打不开
+
+优先使用：
+
+```text
+D:\旅客服务系统智能管理广播平台\旅客服务系统智能管理广播平台.exe
+```
+
+如果桌面快捷方式仍指向旧文件，请右键快捷方式 → 属性 → 修改目标。
+
+### 2. 登录失败
+
+确认 `config.ini` 中账号密码，默认是：
+
+```text
+admin / 123456
+```
+
+### 3. 主界面没有最大化
+
+进入主界面后程序会自动执行 Windows 最大化。若被其他窗口抢焦点，点一下主界面标题栏即可。
+
+### 4. 刷新时是否还会闪
+
+当前版本刷新为增量更新；数据不变时不会写任何表格控件。若仍看到闪烁，请确认启动的是本 README 所列的新 exe，而不是旧版本。
+
+### 5. 没有声音
+
+检查：
+
+- `audio/` 下是否存在对应文件
+- 广播设置中的相对路径是否正确
+- Windows 默认播放设备是否正常
+- 音频文件是否被其他程序占用
+
+---
+
+## 十、运行环境
+
+- Windows 10 / Windows 11
+- 不需要安装 Python 即可运行打包后的 exe
+- 不需要启动后端服务
+- 建议分辨率 1920×1080 及以上
+- 支持 125% 等常见 Windows 缩放比例
