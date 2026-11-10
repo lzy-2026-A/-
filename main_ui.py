@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 import customtkinter as ctk
 from tkinter import ttk, messagebox
+import tkinter as tk
 import time
 import socket
 import json
 import os
+import re
 import sys
+import threading
 
 # 配置
 ctk.set_appearance_mode("dark")
@@ -29,6 +32,97 @@ CHECKIN_TYPES = ("检票预告", "开始检票", "停止检票")
 
 # 新功能晚点类型（配置列表里缺失时自动补齐，保证按钮/播放可用；未知时间已按需求移除）
 NEW_LATE_TYPES = ("紧急-列车晚点·已知时间",)
+
+# ===== 统一排序规则（车次列表 / 车站大屏 / 副屏 / 广播队列共用）=====
+# 状态显示优先级：越靠前越需要旅客立即关注
+STATUS_RANK = {
+    "正在检票": 0, "检票中": 0,
+    "停止检票": 1,
+    "晚点": 2,
+    "待检票": 3, "正在候车": 3, "计划中": 3,
+    "停运": 4,
+    "已发车": 5,
+    "已到达": 6, "取消": 6,
+}
+# 这些状态由人工/业务操作决定，时间逻辑不得覆盖
+MANUAL_STATUSES = {"正在检票", "检票中", "停止检票", "晚点", "停运",
+                   "已发车", "已到达", "取消"}
+
+
+def bcast_priority_label(btype):
+    """队列优先级文字（数字越小越先播）"""
+    p = bcast_priority(btype)
+    label = {10: "停止检票", 20: "开始检票", 30: "检票预告",
+             40: "晚点/停运/变更", 50: "普通"}.get(p, "普通")
+    return f"{p} {label}"
+
+
+def parse_hhmm(value):
+    """HH:MM → 当天分钟数；非法/空值返回 None（排序时排到末尾）"""
+    try:
+        hh, mm = str(value).strip().split(":")
+        h, m = int(hh), int(mm)
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            return None
+        return h * 60 + m
+    except Exception:
+        return None
+
+
+def train_no_key(no):
+    """车次号自然排序键：G2 排在 G10 前面，避免字符串排序错位"""
+    s = str(no or "").strip().upper()
+    return tuple((0, int(p)) if p.isdigit() else (1, p)
+                 for p in re.split(r"(\d+)", s) if p)
+
+
+def effective_train_status(row, smin=5, now_min=None):
+    """车次的有效显示状态：人工状态优先；待检票/计划中按开点时间自动推进。
+    这样大屏既不会把人工设置的“晚点/停运”冲掉，也不会让所有车次永远停在“待检票”。"""
+    st = ""
+    try:
+        st = str(row[7] if len(row) > 7 else "").strip()
+    except Exception:
+        st = ""
+    if st in MANUAL_STATUSES:
+        return st
+    dep = parse_hhmm(row[4] if len(row) > 4 else "")
+    if dep is None:
+        return st or "计划中"
+    if now_min is None:
+        _now = time.localtime()
+        now_min = _now.tm_hour * 60 + _now.tm_min
+    try:
+        lead = max(1, int(smin or 5))
+    except Exception:
+        lead = 5
+    if now_min >= dep:
+        return "停止检票"
+    if now_min >= dep - lead:
+        return "正在检票"
+    return "正在候车"
+
+
+def bcast_priority(btype):
+    """广播队列优先级：数字越小越先播（紧急广播仍走抢占，不排队）"""
+    t = str(btype or "")
+    if "停止检票" in t:
+        return 10
+    if "开始检票" in t:
+        return 20
+    if "检票预告" in t:
+        return 30
+    if any(k in t for k in ("晚点", "停运", "变更站台", "突发")):
+        return 40
+    return 50
+
+
+def bc_type_sort_key(name):
+    """广播类型推荐顺序：内置类型按 DEFAULT_BC_TYPES 顺序，自定义类型稳定排在后面"""
+    try:
+        return DEFAULT_BC_TYPES.index(name)
+    except ValueError:
+        return len(DEFAULT_BC_TYPES)
 
 # ===== 设计变量（统一 UI：颜色/间距/圆角/字号）=====
 DS = {
@@ -56,16 +150,27 @@ DS = {
 }
 
 def zebra(tree):
-    """给 Treeview 行加斑马纹 tag"""
-    for i, c in enumerate(tree.get_children()):
-        tree.item(c, tags=("even" if i % 2 == 0 else "odd",))
+    """给 Treeview 行加固定背景 tag；保留 st_ 开头的状态颜色 tag。
+    不再按行号交替上色：排序/刷新导致行位置变化时，整表背景不会互换，从根源消除闪烁。"""
+    for c in tree.get_children():
+        try:
+            keep = tuple(t for t in tree.item(c, "tags") if str(t).startswith("st_"))
+        except Exception:
+            keep = ()
+        new_tags = ("row",) + keep
+        try:
+            if tuple(tree.item(c, "tags")) != new_tags:
+                tree.item(c, tags=new_tags)
+        except Exception:
+            pass
 
 # 数字字符 → 汉字（新语音包"单个字"目录用汉字文件名）
 CN_DIGITS = {"0": "零", "1": "一", "2": "二", "3": "三", "4": "四",
              "5": "五", "6": "六", "7": "七", "8": "八", "9": "九"}
 
 APP_TITLE = "旅客服务智能管理广播系统"
-APP_VERSION = "V26.9.25"
+APP_VERSION = "V26.10.2"
+_LOG_LOCK = threading.Lock()   # 广播日志读改写锁（播放线程/主线程可能同时写）
 
 # TCP 连接（连 Rust 后端）
 TCP_HOST = "127.0.0.1"
@@ -324,42 +429,47 @@ class BroadcastApp(ctk.CTk):
             pass
         self.username = username
         self.title(APP_TITLE)
-        self.geometry("1400x800")
-        # 窗口/任务栏图标：多路径查找（开发=项目根；打包=exe 同目录/_MEIPASS，均能生效）
+        # 启动时先给一个安全尺寸，UI 构建完成后按 DPI/工作区自动适配
+        self.geometry("1100x700")
+        # 应用图标（exe/任务栏/窗口统一）
         try:
             _ico = None
             for _cand in (os.path.join(get_project_root(), "ico", "CustomTkinter_icon_Windows.ico"),
+                          os.path.join(getattr(sys, "_MEIPASS", ""), "ico", "CustomTkinter_icon_Windows.ico"),
                           os.path.join(os.path.dirname(os.path.abspath(sys.executable)),
-                                       "ico", "CustomTkinter_icon_Windows.ico"),
-                          os.path.join(getattr(sys, "_MEIPASS", ""),
                                        "ico", "CustomTkinter_icon_Windows.ico")):
                 if _cand and os.path.exists(_cand):
                     _ico = _cand
                     break
             if _ico:
                 self.iconbitmap(_ico)
-                # 双保险：iconphoto（某些 DPI/任务栏场景 iconbitmap 不生效）
-                try:
-                    from PIL import Image as _PILImage, ImageTk as _PILImageTk
-                    _ph = _PILImageTk.PhotoImage(_PILImage.open(_ico))
-                    self._icon_photo = _ph   # 保持引用，防止被回收
-                    self.iconphoto(True, _ph)
-                except Exception:
-                    pass
         except Exception:
             pass
         # 拦截右上角关闭按钮
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        # 延迟调用 Windows 系统最大化
-        self.after(100, self.maximize_window)
         # 初始化 UI
         self.__init_body()
 
     def maximize_window(self):
-        """调用 Windows 系统最大化窗口"""
+        """进入主界面后像点右上角“最大化”一样铺满工作区（保留标题栏和任务栏）。
+
+        用 Windows 原生 ShowWindow(SW_MAXIMIZE)，避免 Tk 的 zoomed 在
+        125% DPI 下被 CustomTkinter 二次缩放导致窗口超出屏幕。
+        """
         try:
-            self.wm_state('zoomed')
-        except:
+            self.attributes("-fullscreen", False)
+        except Exception:
+            pass
+        try:
+            import ctypes
+            hwnd = int(self.wm_frame(), 16)
+            ctypes.windll.user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+            return
+        except Exception:
+            pass
+        try:
+            self.state("zoomed")
+        except Exception:
             pass
 
     def on_closing(self):
@@ -375,11 +485,15 @@ class BroadcastApp(ctk.CTk):
         self._train_state_prev = {}      # {车次: 播放前状态}
         self._active_bcast_train = None  # 当前播放涉及的车次
         self._stop_flag = False          # 停止播放标志（合成/播放阶段均可中止）
-        self._bcast_queue = []           # 广播播放队列（非紧急：前一个播完自动播下一个）
+        self._bcast_queue = []           # 广播播放队列（非紧急：按优先级 + 开点时间排序）
         self._queue_pending = False      # 后台播放线程完成标志（线程安全，主线程轮询消费）
         self._queue_ver = 0              # 队列版本号（入队/出队/排序/清空时 +1，用于界面同步刷新）
         self._queue_ver_shown = -1       # 界面已显示的版本号
         self._bcast_gap = 0              # 每条广播间隔秒数（队列播放时两条之间间隔，0=无间隔）
+        self._screen_sort_mode = "time"  # 大屏/车次排序：time=按开点时间（默认稳定），status=按状态优先
+        self._current_btype = ""         # 正在播放的广播类型（队列面板显示用）
+        self._emergency_queue = None     # 紧急抢占待播内容
+        self._emergency_btype = ""
         # 常驻轮询：后台线程播放完成 → 主线程自动续播队列（避免跨线程调用 after 失效）
         try:
             self.after(300, self._poll_bcast_queue)
@@ -415,13 +529,9 @@ class BroadcastApp(ctk.CTk):
         header.grid(row=0, column=0, columnspan=2, sticky="nsew")
         header.grid_propagate(False)
 
-        # Logo
-        logo = ctk.CTkLabel(header, text="🚄", font=ctk.CTkFont(size=28))
-        logo.pack(side="left", padx=15, pady=10)
-
-        # 标题
+        # 标题（无图标，纯文字）
         title = ctk.CTkLabel(header, text=APP_TITLE, font=ctk.CTkFont(size=20, weight="bold"), text_color="#ffffff")
-        title.pack(side="left", padx=10)
+        title.pack(side="left", padx=20)
 
         # 右侧：时钟 + 用户
         self.clock_label = ctk.CTkLabel(header, text="00:00:00", font=ctk.CTkFont(size=16, family="Consolas"), text_color=DS["accent"])
@@ -431,44 +541,97 @@ class BroadcastApp(ctk.CTk):
         user.pack(side="right", padx=10)
 
     def create_sidebar(self):
-        """左侧导航栏"""
-        sidebar = ctk.CTkFrame(self, width=180, corner_radius=0, fg_color=DS["panel2"])
+        """左侧导航栏：自绘行样式，避免 CTkButton 边框/Emoji 在部分 DPI 下显示异常。"""
+        sidebar = ctk.CTkFrame(self, width=200, corner_radius=0, fg_color=DS["panel2"])
         sidebar.grid(row=1, column=0, sticky="nsew")
         sidebar.grid_propagate(False)
 
-        # 导航按钮
-        self.nav_buttons = []
+        ctk.CTkLabel(sidebar, text="功能导航", font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color="#5f7ba3", anchor="w").pack(fill="x", padx=24, pady=(18, 10))
+
         nav_items = [
-            ("📢 广播管理", self.show_broadcast_with_startup),
-            ("📋 广播队列", self.show_queue),
-            ("🚆 车辆管理", self.show_train),
-            ("🖥️ 车站大屏", self.show_screen),
-            ("⚙️ 系统设置", self.show_system),
-            ("🔊 广播设置", self.show_bcast_set),
+            ("广播管理", self.show_broadcast),
+            ("广播队列", self.show_queue),
+            ("车辆管理", self.show_train),
+            ("车站大屏", self.show_screen),
+            ("系统设置", self.show_system),
+            ("广播设置", self.show_bcast_set),
         ]
 
+        self.nav_buttons = []
+        self._nav_rows = []
+        self._nav_bars = []
+        self._nav_nums = []
+        self._nav_labels = []
+
         for i, (text, cmd) in enumerate(nav_items):
-            btn = ctk.CTkButton(
-                sidebar, text=text, command=cmd,
-                font=ctk.CTkFont(size=14),
-                fg_color="transparent", hover_color=DS["nav_hover"],
-                text_color=DS["text_dim"], anchor="w",
-                height=48, corner_radius=6,
-                border_spacing=15
-            )
-            btn.pack(fill="x", padx=10, pady=3)
-            self.nav_buttons.append(btn)
+            row = ctk.CTkFrame(sidebar, height=46, corner_radius=7,
+                               fg_color="transparent", cursor="hand2")
+            row.pack(fill="x", padx=12, pady=3)
+            row.pack_propagate(False)
+
+            bar = ctk.CTkFrame(row, width=3, corner_radius=2, fg_color="transparent")
+            bar.pack(side="left", fill="y", padx=(0, 11), pady=8)
+
+            num = ctk.CTkLabel(row, text=f"{i + 1:02d}", width=25,
+                               font=ctk.CTkFont(size=10, family="Consolas"),
+                               text_color="#4d6484", anchor="w")
+            num.pack(side="left")
+
+            lbl = ctk.CTkLabel(row, text=text, anchor="w",
+                               font=ctk.CTkFont(size=14),
+                               text_color=DS["text_dim"])
+            lbl.pack(side="left", fill="x", expand=True)
+
+            def _enter(_e, r=row, idx=i):
+                if getattr(self, "_active_nav", 0) != idx:
+                    r.configure(fg_color=DS["nav_hover"])
+
+            def _leave(_e, r=row, idx=i):
+                if getattr(self, "_active_nav", 0) != idx:
+                    r.configure(fg_color="transparent")
+
+            def _click(_e, c=cmd):
+                c()
+
+            for w in (row, bar, num, lbl):
+                w.bind("<Enter>", _enter)
+                w.bind("<Leave>", _leave)
+                w.bind("<Button-1>", _click)
+
+            self.nav_buttons.append(row)
+            self._nav_rows.append(row)
+            self._nav_bars.append(bar)
+            self._nav_nums.append(num)
+            self._nav_labels.append(lbl)
+
+        # 底部版本与连接状态（固定贴底，避免窗口高度变化时跟着导航跑）
+        side_foot = ctk.CTkFrame(sidebar, fg_color="transparent")
+        side_foot.pack(side="bottom", fill="x", padx=22, pady=(8, 16))
+        self.sidebar_status = ctk.CTkLabel(side_foot, text="●  本地调度模式",
+                                           font=ctk.CTkFont(size=10),
+                                           text_color="#6be26b", anchor="w")
+        self.sidebar_status.pack(fill="x")
+        ctk.CTkLabel(side_foot, text=f"{APP_VERSION}  ·  SCNet",
+                     font=ctk.CTkFont(size=9), text_color="#40577a",
+                     anchor="w").pack(fill="x", pady=(4, 0))
 
         # 默认选中第一个
         self.set_active_nav(0)
 
     def set_active_nav(self, index):
-        """设置选中的导航"""
-        for i, btn in enumerate(self.nav_buttons):
-            if i == index:
-                btn.configure(fg_color=DS["nav_active"], text_color=DS["accent"], border_width=2, border_color=DS["nav_border"])
-            else:
-                btn.configure(fg_color="transparent", text_color=DS["text_dim"], border_width=0)
+        """设置选中的导航：背景块 + 左侧强调条，不使用按钮边框。"""
+        self._active_nav = index
+        for i in range(len(getattr(self, "_nav_rows", []))):
+            active = (i == index)
+            try:
+                self._nav_rows[i].configure(fg_color=DS["nav_active"] if active else "transparent")
+                self._nav_bars[i].configure(fg_color=DS["accent"] if active else "transparent")
+                self._nav_nums[i].configure(text_color=DS["accent"] if active else "#4d6484")
+                self._nav_labels[i].configure(text_color="#ffffff" if active else DS["text_dim"],
+                                              font=ctk.CTkFont(size=14, weight="bold" if active else "normal"))
+            except Exception:
+                pass
 
     def create_content(self):
         """右侧内容区"""
@@ -517,6 +680,21 @@ class BroadcastApp(ctk.CTk):
         try:
             self.deiconify()
             self.update_idletasks()
+            # deiconify 后立即按 DPI/工作区适配，避免窗口超出桌面
+            self.after(500, self.maximize_window)
+            # CustomTkinter 在设置标题栏颜色时会再次 withdraw；延迟兜底显示，避免只闻其声不见窗口
+            self.after(600, self._ensure_window_visible)
+        except Exception:
+            pass
+
+    def _ensure_window_visible(self):
+        """兜底显示主窗口（CTk 高 DPI/标题栏重绘后可能仍保持 withdrawn）。"""
+        try:
+            if self.state() in ("withdrawn", "iconic"):
+                self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.after(700, lambda: self.attributes("-topmost", False))
         except Exception:
             pass
 
@@ -532,15 +710,17 @@ class BroadcastApp(ctk.CTk):
         head = ctk.CTkFrame(panel, fg_color=BLUE_H, corner_radius=0, height=118)
         head.grid(row=0, column=0, sticky="ew")
         head.grid_columnconfigure(0, weight=1)
+        head.grid_columnconfigure(1, minsize=250, weight=0)
         head.grid_propagate(False)
         ctk.CTkLabel(head, text="旅客服务智能管理广播系统 · 车站大屏",
                     font=ctk.CTkFont(size=22, weight="bold"),
                     text_color="#9fd4ff").grid(row=0, column=0, sticky="w", padx=30, pady=(14, 0))
-        self.screen_clock = ctk.CTkLabel(head, text="--:--:--",
-                                         font=ctk.CTkFont(size=34, weight="bold"),
+        self.screen_clock = ctk.CTkLabel(head, text="--:--:--", width=240, anchor="e",
+                                         font=ctk.CTkFont(size=30, weight="bold"),
                                          text_color="#ffffff")
         self.screen_clock.grid(row=0, column=1, sticky="e", padx=30, pady=(8, 0))
-        self.screen_date = ctk.CTkLabel(head, text="", font=ctk.CTkFont(size=15), text_color="#9fc8ee")
+        self.screen_date = ctk.CTkLabel(head, text="", width=240, anchor="e",
+                                        font=ctk.CTkFont(size=15), text_color="#9fc8ee")
         self.screen_date.grid(row=1, column=1, sticky="e", padx=30)
         # 欢迎横幅（站名来自系统设置：车站显示设置；上移与日期同行）
         self.screen_welcome = ctk.CTkLabel(head, text="", font=ctk.CTkFont(size=30, weight="bold"),
@@ -567,13 +747,19 @@ class BroadcastApp(ctk.CTk):
                                              font=ctk.CTkFont(size=12), text_color="#cfe6ff",
                                              command=self._on_sw_full_toggle)
         self._sw_full_switch.pack(side="left", padx=8, pady=12)
-        ctk.CTkButton(foot, text="🔄 刷新", width=90, height=32, fg_color="#0a4a8a",
+        # 排序方式：默认按开点时间（稳定不跳动），可切换为状态优先
+        self.screen_sort_menu = ctk.CTkOptionMenu(
+            foot, values=["按开点时间", "按状态优先"], width=118, height=30,
+            font=ctk.CTkFont(size=12), command=self._on_screen_sort_change)
+        self.screen_sort_menu.set("按开点时间")
+        self.screen_sort_menu.pack(side="left", padx=8, pady=12)
+        ctk.CTkButton(foot, text="刷新", width=90, height=32, fg_color="#0a4a8a",
                       hover_color="#0d5aa5", font=ctk.CTkFont(size=13),
                       command=self.refresh_screen).pack(side="right", padx=12, pady=8)
-        ctk.CTkButton(foot, text="🖥 独立窗口", width=110, height=32, fg_color="#0a4a8a",
+        ctk.CTkButton(foot, text="独立窗口", width=110, height=32, fg_color="#0a4a8a",
                       hover_color="#0d5aa5", font=ctk.CTkFont(size=13),
                       command=self.open_screen_window).pack(side="right", padx=6, pady=8)
-        ctk.CTkButton(foot, text="⏹ 关闭副屏", width=100, height=32, fg_color="#8a2a2a",
+        ctk.CTkButton(foot, text="关闭副屏", width=100, height=32, fg_color="#8a2a2a",
                       hover_color="#aa3a3a", font=ctk.CTkFont(size=13),
                       command=self._close_screen_win).pack(side="right", padx=2, pady=8)
         return panel
@@ -593,6 +779,26 @@ class BroadcastApp(ctk.CTk):
                         self.set_status("副屏已切换为全屏显示（Esc 退出全屏）")
                     else:
                         self.set_status("副屏已恢复为正常窗口")
+            except Exception:
+                pass
+
+    def _on_screen_sort_change(self, value):
+        """大屏排序方式切换：按开点时间（推荐，顺序稳定）/ 按状态优先"""
+        self._screen_sort_mode = "status" if "状态" in str(value) else "time"
+        try:
+            self.save_bc_settings(silent=True)
+        except Exception:
+            pass
+        self.refresh_screen(silent=True)
+        try:
+            self.load_trains()
+        except Exception:
+            pass
+        # 副屏同步刷新
+        _rf = getattr(self, "_sw_refresh", None)
+        if _rf is not None:
+            try:
+                _rf()
             except Exception:
                 pass
 
@@ -742,7 +948,8 @@ class BroadcastApp(ctk.CTk):
         self._sw_mode = "full" if full_mode else "normal"
         win = ctk.CTkToplevel(self)
         win.title("车站大屏 - 旅客服务系统智能管理广播系统")
-        self._apply_screen_mode(win, full_mode)
+        # 全屏/无边框模式必须等窗口和控件建完再应用，否则 Toplevel 尚未映射，
+        # overrideredirect 会导致副屏尺寸/位置错乱（只占屏幕一角或闪一下）。
         win.attributes("-topmost", True)   # 大屏副屏常驻最前（不被其他窗口顶到下面）
         win.lift()
         BLUE_D = "#04294a"
@@ -911,7 +1118,8 @@ class BroadcastApp(ctk.CTk):
                 _c = time.strftime("%H:%M:%S")
                 if self._sw_clock.cget("text") != _c:
                     self._sw_clock.configure(text=_c)
-                _d = time.strftime("%Y-%m-%d %A")
+                _wd = "一二三四五六日"[time.localtime().tm_wday]
+                _d = time.strftime("%Y-%m-%d") + f" 星期{_wd}"
                 if self._sw_date.cget("text") != _d:
                     self._sw_date.configure(text=_d)
             except Exception:
@@ -925,6 +1133,11 @@ class BroadcastApp(ctk.CTk):
         self._sw_refresh = _refresh
         _refresh()
         _clock_tick()
+        if full_mode:
+            try:
+                win.after(80, lambda: self._apply_screen_mode(win, True))
+            except Exception:
+                pass
 
         def _esc(_e=None):
             try:
@@ -987,7 +1200,7 @@ class BroadcastApp(ctk.CTk):
     def _add_screen_row(self, mid, idx, r):
         """r: [车次, 类型, 发站, 到站, 开点, 检票口, 站台, 状态]"""
         inner = getattr(mid, "_parent_frame", mid)
-        bg = "#0a3a68" if idx % 2 == 0 else "#0b4278"
+        bg = "#0a3a68"
         row_frame = ctk.CTkFrame(inner, fg_color=bg, corner_radius=6)
         row_frame.grid(row=idx + 1, column=0, sticky="ew", pady=4)
         # 7 列均分（与表头 uniform 一致，保证逐列竖向对齐 + 均匀对称）
@@ -1010,12 +1223,8 @@ class BroadcastApp(ctk.CTk):
         self._screen_widgets.append(row_frame)
         key = str(r[0])
         # 以车次号为稳定键存储：排序变化时行只移动位置、不覆盖内容（根治"乱跳"）
-        self.screen_rows[key] = {"labels": labels, "raw": r, "frame": row_frame, "idx": idx}
-        # 新建行淡入动画（短暂背景渐变，刷新不跳变）
-        try:
-            self.after(10, lambda: self._fade_in_screen_row(row_frame, bg, ("main", key)))
-        except Exception:
-            pass
+        self.screen_rows[key] = {"labels": labels, "raw": r, "frame": row_frame, "idx": idx, "bg": bg}
+        # 不做淡入/闪烁动画：刷新时保持静态，避免用户看到“闪一下”
 
     # ---------- 大屏刷新动画（轻量高亮过渡 / 新建行淡入，防抖、不阻塞、低占用） ----------
     def _flash_screen_labels(self, labels, anim_key):
@@ -1080,8 +1289,11 @@ class BroadcastApp(ctk.CTk):
         if row is None:
             return
         old = row.get("raw")
+        bg = "#0a3a68"
         try:
-            row["frame"].configure(fg_color="#0a3a68" if row.get("idx", 0) % 2 == 0 else "#0b4278")
+            if row.get("bg") != bg:
+                row["frame"].configure(fg_color=bg)
+                row["bg"] = bg
         except Exception:
             pass
         if old == r:
@@ -1092,15 +1304,12 @@ class BroadcastApp(ctk.CTk):
         for col, v in enumerate(vals):
             if col < len(labels):
                 try:
-                    labels[col].configure(text=v)
+                    if labels[col].cget("text") != v:
+                        labels[col].configure(text=v)
                 except Exception:
                     pass
         row["raw"] = r
-        # 数据变化时文本列短暂高亮过渡动画（状态列不动，保持业务色）
-        try:
-            self._flash_screen_labels(labels[:6], ("main", key))
-        except Exception:
-            pass
+        # 不做高亮/闪烁动画：刷新时文本保持稳定颜色
 
     def _destroy_screen_row(self, key):
         """按车次号删除指定行（frame + labels 一并清理引用）"""
@@ -1134,6 +1343,47 @@ class BroadcastApp(ctk.CTk):
                 "检票中": "#4dff6e", "已到达": "#4dff6e",
                 "取消": "#ff5a5a"}.get(str(status).strip(), "#ffd24d")
 
+    def _train_status_tag(self, status):
+        """广播管理车次列表的状态颜色 tag（按业务状态分组）"""
+        st = str(status or "").strip()
+        if st in ("正在检票", "检票中"):
+            return "st_green"
+        if st in ("停止检票", "停运", "晚点", "取消"):
+            return "st_red"
+        if st == "待检票":
+            return "st_cyan"
+        if st in ("正在候车", "计划中"):
+            return "st_yellow"
+        if st in ("已发车", "已到达"):
+            return "st_gray"
+        return "st_default"
+
+    def apply_train_status_colors(self):
+        """车次列表按状态着色：正在检票绿、停止检票/停运/晚点红，其余按候车/待检/已发车区分。"""
+        try:
+            tree = self.bc_train_tree
+            colors = {
+                "st_green": "#4dff6e",
+                "st_red": "#ff5a5a",
+                "st_cyan": "#9adcff",
+                "st_yellow": "#ffd24d",
+                "st_gray": "#9aa7b5",
+                "st_default": DS["text"],
+            }
+            for tag, color in colors.items():
+                tree.tag_configure(tag, foreground=color)
+            for i, c in enumerate(tree.get_children()):
+                vals = list(tree.item(c, "values"))
+                st = str(vals[7]) if len(vals) > 7 else ""
+                new_tags = ("row", self._train_status_tag(st))
+                try:
+                    if tuple(tree.item(c, "tags")) != new_tags:
+                        tree.item(c, tags=new_tags)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     def _update_screen_statuses(self, smin=None):
         try:
             now = time.localtime()
@@ -1149,30 +1399,13 @@ class BroadcastApp(ctk.CTk):
             except Exception:
                 pass
             for key, row in self.screen_rows.items():
-                r = row["raw"]
-                dep = (str(r[4]) or "").strip()
-                # 状态实时读统一数据源（车次树状态列），而非行创建时的快照
-                st_txt = st_map.get(str(r[0]), "")
-                st_txt = st_txt.strip()
-                auto = "正在候车"
-                if dep:
-                    try:
-                        hh, mm = dep.split(":")
-                        dep_min = int(hh) * 60 + int(mm)
-                        if now_min >= dep_min:
-                            auto = "停止检票"
-                        elif now_min >= dep_min - int(smin):
-                            auto = "正在检票"
-                        else:
-                            auto = "正在候车"
-                    except Exception:
-                        auto = "正在候车"
-                # 所有已知状态一律保留用户设定，绝不被时间逻辑覆盖（"跳回去"修复）
-                if st_txt in ("停止检票", "正在检票", "正在候车", "已发车", "晚点", "待检票", "停运",
-                              "计划中", "检票中", "已到达", "取消"):
-                    disp = st_txt
-                else:
-                    disp = auto
+                r = list(row.get("raw") or [])
+                if len(r) < 9:
+                    r += [""] * (9 - len(r))
+                # 状态实时读统一数据源（车次树状态列），再按时间推进；人工状态不被覆盖
+                _st = st_map.get(str(r[0]), str(r[7]) if len(r) > 7 else "")
+                r[7] = str(_st).strip()
+                disp = effective_train_status(r, smin, now_min)
                 color = self.get_screen_status_color(disp)
                 # 状态列始终是行内最后一个 label（与列数无关）；无变化跳过重绘
                 _lab = row["labels"][-1]
@@ -1210,18 +1443,18 @@ class BroadcastApp(ctk.CTk):
         auto_frame = ctk.CTkFrame(panel, fg_color="transparent")
         auto_frame.grid(row=1, column=0, sticky="nsew")
         auto_frame.grid_columnconfigure(0, weight=1)
-        auto_frame.grid_rowconfigure(2, weight=1)
+        auto_frame.grid_rowconfigure(4, weight=1)
         self._sys_auto_frame = auto_frame
 
-        ctk.CTkLabel(auto_frame, text="⏰ 定时广播（到点自动播放指定广播）",
+        ctk.CTkLabel(auto_frame, text="定时广播（到点自动播放指定广播）",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=DS["accent"]).grid(row=0, column=0, sticky="w", padx=20, pady=(16, 2))
-        ctk.CTkLabel(auto_frame, text="每天到设定时间自动播放：时间(HH:MM) + 广播类型 + 车次（车次可留空=播放默认测试车次），播放时同步车站大屏",
-                     font=ctk.CTkFont(size=11), text_color=DS["text_dim"]).grid(row=0, column=0, sticky="w", padx=20, pady=(44, 2))
+        ctk.CTkLabel(auto_frame, text="每天到设定时间自动播放：时间(HH:MM) + 广播类型 + 车次（车次可留空=使用当前选中车次），播放时同步车站大屏",
+                     font=ctk.CTkFont(size=11), text_color=DS["text_dim"]).grid(row=1, column=0, sticky="w", padx=20, pady=(0, 6))
 
         # ----- 添加区 -----
         add_frame = ctk.CTkFrame(auto_frame, fg_color=DS["panel2"], corner_radius=8)
-        add_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 4))
+        add_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(6, 4))
         add_frame.grid_columnconfigure(1, weight=1)
         add_frame.grid_columnconfigure(3, weight=1)
 
@@ -1259,7 +1492,7 @@ class BroadcastApp(ctk.CTk):
 
         # ----- 任务列表 -----
         list_frame = ctk.CTkFrame(auto_frame, fg_color=DS["panel2"], corner_radius=8)
-        list_frame.grid(row=3, column=0, sticky="nsew", padx=20, pady=(4, 4))
+        list_frame.grid(row=4, column=0, sticky="nsew", padx=20, pady=(4, 4))
         list_frame.grid_columnconfigure(0, weight=1)
         list_frame.grid_rowconfigure(0, weight=1)
 
@@ -1279,27 +1512,30 @@ class BroadcastApp(ctk.CTk):
         for i, col in enumerate(("时间", "广播类型", "车次", "状态")):
             self.sched_tree.heading(col, text=col)
             self.sched_tree.column(col, width=[90, 170, 120, 80][i], anchor="center")
-        self.sched_tree.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+        self.sched_tree.grid(row=0, column=0, sticky="nsew", padx=(10, 0), pady=10)
+        sched_vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.sched_tree.yview)
+        sched_vsb.grid(row=0, column=1, sticky="ns", padx=(0, 6), pady=10)
+        self.sched_tree.configure(yscrollcommand=sched_vsb.set)
         self.sched_tree.bind("<Double-1>", self.toggle_schedule)
 
         op_frame = ctk.CTkFrame(auto_frame, fg_color="transparent")
-        op_frame.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 10))
+        op_frame.grid(row=5, column=0, sticky="ew", padx=20, pady=(0, 10))
         ctk.CTkButton(op_frame, text="⏯ 启用/停用(双击列表也可)", width=160, height=32,
                       fg_color=DS["btn"], hover_color=DS["btn_hover"],
                       command=self.toggle_schedule).pack(side="left", padx=2)
         ctk.CTkButton(op_frame, text="- 删除选中", width=110, height=32,
                       fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                       command=self.del_schedule).pack(side="left", padx=2)
-        ctk.CTkButton(op_frame, text="↺ 恢复默认(清空)", width=120, height=32,
+        ctk.CTkButton(op_frame, text="恢复默认(清空)", width=120, height=32,
                       fg_color=DS["btn_warn"], hover_color=DS["btn_warn_hover"],
                       command=self.clear_schedule).pack(side="right", padx=2)
 
         # ===== 车次时刻自动广播（按开点自动播检票预告/开始检票） =====
         auto2 = ctk.CTkFrame(auto_frame, fg_color=DS["panel2"], corner_radius=8)
-        auto2.grid(row=2, column=0, sticky="ew", padx=20, pady=(2, 4))
-        auto2.grid_columnconfigure(2, weight=1)
-        auto2.grid_columnconfigure(5, weight=1)
-        ctk.CTkLabel(auto2, text="🚄 车次时刻自动广播（按开点自动播放）",
+        auto2.grid(row=3, column=0, sticky="ew", padx=20, pady=(2, 4))
+        # 右侧留伸缩列，控件本身紧凑靠左；不要把输入框所在列设 weight，否则“分钟”被推到屏幕最右
+        auto2.grid_columnconfigure(7, weight=1)
+        ctk.CTkLabel(auto2, text="车次时刻自动广播（按开点自动播放）",
                      font=ctk.CTkFont(size=13, weight="bold"), text_color=DS["accent"]).grid(
             row=0, column=0, columnspan=7, sticky="w", padx=14, pady=(10, 2))
         ctk.CTkLabel(auto2, text="启用后根据车辆管理中的开点时间，开点前 N 分钟自动播检票预告 / 开点前 M 分钟自动播开始检票，播放时同步车站大屏（每日每车次只触发一次）",
@@ -1416,7 +1652,8 @@ class BroadcastApp(ctk.CTk):
             "startup_log": True, "auto_restart": False,
             "audio_device": "默认设备", "master_volume": 80, "max_volume": 100,
             "fade_ms": 120, "anti_pop": True,
-            "server_host": "127.0.0.1", "server_port": 27890, "protocol": "TCP",
+            "night_mute": False, "night_start": "23:00", "night_end": "06:00", "night_volume": 30,
+            "server_host": "127.0.0.1", "server_port": 8888, "protocol": "TCP",
             "heartbeat_s": 30, "timeout_s": 3, "reconnect_n": 5,
             "resync_on_reconnect": True, "offline_cache": True, "multi_sync": False,
             "default_zone": "A区", "terminal_group": "全部", "offline_s": 60,
@@ -1571,7 +1808,7 @@ class BroadcastApp(ctk.CTk):
     def _gs_build_net(self, content):
         self._gs_build_cat(content, "net", [
             ("服务器地址", "server_host", "text", "127.0.0.1", None, "后端/大屏同步服务器"),
-            ("端口", "server_port", "num", 27890, None, "连接端口"),
+            ("端口", "server_port", "num", 8888, None, "连接端口（后端默认 8888）"),
             ("协议", "protocol", "combo", "TCP", ["TCP", "WebSocket", "SSE", "MQTT"], "同步通信协议"),
             ("心跳间隔(秒)", "heartbeat_s", "num", 30, None, "保活心跳周期"),
             ("超时(秒)", "timeout_s", "num", 3, None, "单次请求超时"),
@@ -1781,9 +2018,9 @@ class BroadcastApp(ctk.CTk):
                 try:
                     ex = []
                     if getattr(self, "start_sound_btn", None):
-                        ex.append(("开始音", str(self.start_sound_btn.cget("text"))))
+                        ex.append(("开始音", getattr(self, "_start_sound_value", "")))
                     if getattr(self, "end_sound_btn", None):
-                        ex.append(("结束音", str(self.end_sound_btn.cget("text"))))
+                        ex.append(("结束音", getattr(self, "_end_sound_value", "")))
                     if getattr(self, "main_audio_entry", None):
                         ex.append(("主界面播放音频", str(self.main_audio_entry.get()).strip()))
                     st["extras"] = ex
@@ -1961,6 +2198,14 @@ class BroadcastApp(ctk.CTk):
             return {}
 
     def save_sys_config(self, cfg):
+        """保存系统配置：与磁盘旧配置合并，保留本界面未暴露的键（夜间/自动广播/未来扩展）"""
+        try:
+            _old = self.load_sys_config()
+            if isinstance(_old, dict):
+                _old.update(cfg or {})
+                cfg = _old
+        except Exception:
+            pass
         with open(self._sys_cfg_file(), "w", encoding="utf-8") as f:
             json.dump(cfg, f, ensure_ascii=False, indent=2)
 
@@ -2095,7 +2340,9 @@ class BroadcastApp(ctk.CTk):
         if not path:
             return
         try:
-            cfg = self._gs_collect()
+            # 导出完整配置（含界面未展示的夜间/自动广播等键），而不是只导出当前页控件
+            cfg = self.load_sys_config()
+            cfg.update(self._gs_collect())
             self.save_sys_config(cfg)
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
@@ -2107,14 +2354,19 @@ class BroadcastApp(ctk.CTk):
         import threading
         def _t():
             try:
+                # 用第一个车次做测试，避免无车次时播出残缺内容
+                if not self.current_train:
+                    _kids = self.bc_train_tree.get_children()
+                    if _kids:
+                        self._select_train_in_main(str(self.bc_train_tree.item(_kids[0])["values"][0]))
                 al = self.build_audio_list_from_steps("检票预告")
                 if al:
-                    self.play_concat_audio(al, btype="音频输出测试")
+                    self.play_concat_audio(al, btype="音频输出测试", source="测试")
                     self.set_status("音频输出测试：正在播放")
                     return
             except Exception:
                 pass
-            self.set_status("音频输出测试：无可用音频")
+            self.set_status("音频输出测试：无可用音频（请检查语音包与检票预告配置）")
         threading.Thread(target=_t, daemon=True).start()
 
     def _gs_test_network(self):
@@ -2123,7 +2375,14 @@ class BroadcastApp(ctk.CTk):
             h = self._gs_fields.get("server_host")
             p = self._gs_fields.get("server_port")
             host = h.get().strip() if h else "127.0.0.1"
-            port = int(p.get().strip()) if p else 27890
+            port = int(p.get().strip()) if p else 8888
+            # 旧版本默认端口 27890 是客户端自身监听端口，连自己必然“通过”但后端没通；
+            # 后端实际是 8888，遇到旧默认值自动纠正并把输入框一起改掉。
+            if port == 27890:
+                port = 8888
+                if p is not None:
+                    p.delete(0, "end")
+                    p.insert(0, "8888")
             s = socket.create_connection((host, port), timeout=2)
             s.close()
             self.set_status(f"网络测试通过：{host}:{port} 可连接")
@@ -2143,17 +2402,19 @@ class BroadcastApp(ctk.CTk):
     def _gs_export_log(self):
         from tkinter import filedialog
         import shutil
+        # 广播历史 + 运行日志都可能存在；优先导出广播历史（真实产生的内容）
         src = None
-        for name in ("bcast.log", "main_ui.log", "app.log"):
+        for name in ("bcast_log.json", "bcast.log", "main_ui.log", "app.log"):
             cand = os.path.join(get_project_root(), name)
             if os.path.exists(cand):
                 src = cand
                 break
         if src is None:
-            self.set_status("未找到日志文件")
+            self.set_status("暂无日志：尚未产生广播记录，也没有运行日志文件")
             return
-        path = filedialog.asksaveasfilename(title="导出日志", defaultextension=".log",
-                                            initialfile="系统日志.log", filetypes=[("日志", "*.log")])
+        path = filedialog.asksaveasfilename(title="导出日志", defaultextension=os.path.splitext(src)[1] or ".log",
+                                            initialfile="系统日志" + os.path.splitext(src)[1],
+                                            filetypes=[("日志/JSON", "*.log;*.json"), ("所有文件", "*.*")])
         if not path:
             return
         try:
@@ -2219,6 +2480,85 @@ class BroadcastApp(ctk.CTk):
         self.set_status(f"当前版本 v{ver}（离线部署版，暂无更新源）")
 
 
+    # ---------- 广播步骤：文件真实位置 / 缺失占位 ----------
+    def _audio_file_readable(self, path):
+        """文件存在、非空且能实际打开（用于区分“找不到/打不开”）。"""
+        try:
+            if not path or not os.path.isfile(path):
+                return False
+            if os.path.getsize(path) <= 0:
+                return False
+            with open(path, "rb") as f:
+                f.read(8)
+            return True
+        except Exception:
+            return False
+
+    def _resolve_step_audio(self, content):
+        """把步骤内容解析为真实存在的音频绝对路径；变量/空/缺失返回 None。"""
+        s = str(content or "").strip()
+        if not s or (s.startswith("{") and s.endswith("}")):
+            return None
+        try:
+            parsed = self.parse_step(s)
+        except Exception:
+            parsed = None
+        if parsed:
+            kind, value = parsed
+            if kind == "__path__":
+                return value if self._audio_file_readable(value) else None
+            if kind != "var":
+                try:
+                    found = self.find_audio_file(kind, value, fuzzy=True)
+                except Exception:
+                    found = None
+                if found and self._audio_file_readable(found):
+                    return found
+        return None
+
+    def _step_display(self, content):
+        """步骤表显示文本：文件显示真实位置；找不到/打不开显示“点击添加文件”。"""
+        s = str(content or "").strip()
+        if s.startswith("{") and s.endswith("}"):
+            return s
+        p = self._resolve_step_audio(s)
+        if p:
+            try:
+                rel = os.path.relpath(p, AUDIO_DIR)
+                if not rel.startswith(".."):
+                    return rel.replace("/", "\\")
+            except Exception:
+                pass
+            return p
+        return "点击添加文件"
+
+    def _step_insert(self, index, num, content, speed="1.00x", iid=None):
+        """插入步骤行，并把原始内容保存在隐藏映射中（显示文本可替换而不丢配置）。"""
+        if not hasattr(self, "_step_raw"):
+            self._step_raw = {}
+        kw = {"values": (str(num), self._step_display(content), str(speed))}
+        if iid:
+            kw["iid"] = iid
+        new_iid = self.step_tree.insert("", index, **kw)
+        self._step_raw[new_iid] = str(content or "")
+        return new_iid
+
+    def _step_raw_value(self, iid, vals):
+        """读取步骤原始内容；显示占位符时绝不能被当成配置写回。"""
+        if hasattr(self, "_step_raw") and iid in self._step_raw:
+            return self._step_raw[iid]
+        return str(vals[1]) if len(vals) > 1 else ""
+
+    def _step_refresh_display(self, iid, speed=None):
+        """根据原始内容刷新单行显示（选完文件/编辑后调用）。"""
+        try:
+            vals = list(self.step_tree.item(iid)["values"])
+            raw = self._step_raw_value(iid, vals)
+            spd = str(speed if speed is not None else (vals[2] if len(vals) > 2 else "1.00x"))
+            self.step_tree.item(iid, values=(str(vals[0]), self._step_display(raw), spd))
+        except Exception:
+            pass
+
     def create_bcast_set_panel(self):
         """广播设置面板（步骤式，每步可选音频）"""
         self.bcast_set_panel = ctk.CTkFrame(self.content_frame, fg_color="transparent")
@@ -2264,10 +2604,10 @@ class BroadcastApp(ctk.CTk):
         ctk.CTkButton(map_btn_frame, text="- 删除映射", width=100, height=28,
                      fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                      command=self.del_map).pack(side="left", padx=2)
-        ctk.CTkButton(map_btn_frame, text="📁 浏览设置", width=100, height=28,
+        ctk.CTkButton(map_btn_frame, text="浏览设置", width=100, height=28,
                      fg_color=DS["btn"], hover_color=DS["btn_hover"],
                      command=self.browse_map_audio).pack(side="left", padx=2)
-        ctk.CTkButton(map_btn_frame, text="↺ 恢复默认", width=100, height=28,
+        ctk.CTkButton(map_btn_frame, text="恢复默认", width=100, height=28,
                      fg_color=DS["btn"], hover_color=DS["btn_hover"],
                      command=self.reset_map_defaults).pack(side="left", padx=2)
 
@@ -2289,6 +2629,7 @@ class BroadcastApp(ctk.CTk):
                                              font=ctk.CTkFont(size=10),
                                              command=self.browse_start_sound)
         self.start_sound_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        self._start_sound_value = ""
 
         # 结束音
         end_row = ctk.CTkFrame(sound_frame, fg_color="transparent")
@@ -2300,6 +2641,7 @@ class BroadcastApp(ctk.CTk):
                                            font=ctk.CTkFont(size=10),
                                            command=self.browse_end_sound)
         self.end_sound_btn.pack(side="left", fill="x", expand=True, padx=(5, 0))
+        self._end_sound_value = ""
 
         # 语速设置
         ctk.CTkLabel(sound_frame, text="播放参数，保存后生效",
@@ -2422,31 +2764,13 @@ class BroadcastApp(ctk.CTk):
                      font=ctk.CTkFont(size=11), command=self.reset_var_dirs).pack(anchor="w", padx=10, pady=(6, 10))
         self.dir_map = {"车站": "车站", "检票口": "检票口", "站台": "站台", "数字": "数字", "单个字": "单个字"}
 
-        # ===== 通用音频配置（启动音频 / 主界面播放音频）=====
+        # ===== 通用音频配置（仅保留主界面手动播放音频）=====
         gen_frame = ctk.CTkFrame(map_frame, fg_color=DS["panel2"], corner_radius=8)
         gen_frame.pack(fill="x", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(gen_frame, text="通用音频配置，保存后生效",
+        ctk.CTkLabel(gen_frame, text="主界面播放音频（手动播放时使用）",
                     font=ctk.CTkFont(size=13, weight="bold"),
                     text_color=DS["accent"]).pack(anchor="w", padx=10, pady=(10, 5))
-
-        # --- 启动音频 ---
-        su_row = ctk.CTkFrame(gen_frame, fg_color="transparent")
-        su_row.pack(fill="x", padx=10, pady=2)
-        ctk.CTkLabel(su_row, text="启动音频:", width=90,
-                    font=ctk.CTkFont(size=11), text_color="#aaa").pack(side="left")
-        self.startup_audio_entry = ctk.CTkEntry(su_row, placeholder_text="tsy/tsy2.mp3",
-                                                font=ctk.CTkFont(size=10), height=28)
-        self.startup_audio_entry.insert(0, "tsy/tsy2.mp3")
-        self.startup_audio_entry.pack(side="left", fill="x", expand=True, padx=(4, 4))
-        self.startup_audio_entry.bind("<FocusOut>", lambda e: self.save_bc_settings(silent=True))
-        self.startup_audio_entry.bind("<Return>", lambda e: self.save_bc_settings(silent=True))
-        ctk.CTkButton(su_row, text="浏览", width=52, height=26, fg_color=DS["btn"], hover_color=DS["btn_hover"],
-                     font=ctk.CTkFont(size=10), command=self.browse_startup_audio).pack(side="left", padx=(0, 2))
-        ctk.CTkButton(su_row, text="试听", width=52, height=26, fg_color=DS["btn_success"], hover_color=DS["btn_success_hover"],
-                     font=ctk.CTkFont(size=10), command=lambda: self.preview_cfg_audio(self.startup_audio_entry)).pack(side="left", padx=(0, 2))
-        ctk.CTkButton(su_row, text="停止", width=52, height=26, fg_color="#555", hover_color="#777",
-                     font=ctk.CTkFont(size=10), command=self.stop_preview_audio).pack(side="left", padx=(0, 2))
 
         # --- 主界面播放音频 ---
         ma_row = ctk.CTkFrame(gen_frame, fg_color="transparent")
@@ -2482,7 +2806,12 @@ class BroadcastApp(ctk.CTk):
         self.type_tree = ttk.Treeview(type_frame, columns=("类型",), show="headings", height=6)
         self.type_tree.heading("类型", text="广播类型（紧急广播弹窗也按此列表显示）")
         self.type_tree.column("类型", width=220, anchor="w")
-        self.type_tree.pack(fill="x", padx=10, pady=(0, 5))
+        type_box = ctk.CTkFrame(type_frame, fg_color="transparent")
+        type_box.pack(fill="x", padx=10, pady=(0, 5))
+        self.type_tree.pack(side="left", fill="both", expand=True)
+        type_vsb = ttk.Scrollbar(type_box, orient="vertical", command=self.type_tree.yview)
+        type_vsb.pack(side="right", fill="y")
+        self.type_tree.configure(yscrollcommand=type_vsb.set)
         for _typ in self.get_bcast_types():
             self.type_tree.insert("", "end", values=(_typ,))
         zebra(self.type_tree)
@@ -2507,6 +2836,9 @@ class BroadcastApp(ctk.CTk):
                       command=lambda: self.move_bcast_type(1)).pack(side="left", padx=2)
         ctk.CTkButton(type_btn, text="删除", width=64, height=26, fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                       font=ctk.CTkFont(size=11), command=self.del_bcast_type).pack(side="left", padx=2)
+        ctk.CTkButton(type_btn, text="推荐排序", width=96, height=26, fg_color=DS["btn_primary"],
+                      hover_color=DS["btn_primary_hover"], font=ctk.CTkFont(size=11),
+                      command=self.sort_bcast_types).pack(side="left", padx=2)
 
         # ===== 手动播放（排序模式）：自定义顺序播放 =====
         manual_frame = ctk.CTkFrame(map_frame, fg_color=DS["panel2"], corner_radius=8)
@@ -2517,7 +2849,7 @@ class BroadcastApp(ctk.CTk):
                      text_color=DS["accent"]).pack(anchor="w", padx=10, pady=(10, 5))
         ctk.CTkLabel(manual_frame, text="自定义播放顺序：每一步可指定音频文件/语速，排完按顺序播放",
                      font=ctk.CTkFont(size=10), text_color=DS["text_dim"]).pack(anchor="w", padx=10, pady=(0, 6))
-        ctk.CTkButton(manual_frame, text="🔄 打开手动播放排序窗口", height=32,
+        ctk.CTkButton(manual_frame, text="打开手动播放排序窗口", height=32,
                      fg_color="#555", hover_color="#777",
                      font=ctk.CTkFont(size=12),
                      command=self.open_manual_play_dialog).pack(fill="x", padx=10, pady=(0, 10))
@@ -2547,23 +2879,28 @@ class BroadcastApp(ctk.CTk):
         if "检票预告" not in self.bc_steps:
             self.bc_steps["检票预告"] = [list(s) for s in self.get_default_steps("检票预告")]
 
-        ctk.CTkLabel(tpl_frame, text="广播步骤（按顺序播放）",
+        ctk.CTkLabel(tpl_frame, text="广播步骤（按实际文件位置顺序播放）",
                     font=ctk.CTkFont(size=14, weight="bold"),
                     text_color=DS["accent"]).pack(anchor="w", padx=15, pady=(0, 10))
 
-        ctk.CTkLabel(tpl_frame, text="每行一步，{发站}{到站}{车次}{检票口}{站台}{停靠站台} 是变量；双击可改内容与本步语速",
+        ctk.CTkLabel(tpl_frame, text="每行一步，按列表从上到下播放；文件列显示真实位置，找不到或打不开显示“点击添加文件”。{发站}{到站}{车次} 是变量。",
                     font=ctk.CTkFont(size=11), text_color=DS["text_dim"]).pack(anchor="w", padx=15, pady=(0, 10))
 
         # 步骤列表（第 3 列 = 本步语速，1.00x=跟随整体语速）
         step_cols = ("顺序", "音频文件", "语速")
-        self.step_tree = ttk.Treeview(tpl_frame, columns=step_cols, show="headings", height=10)
+        step_box = ctk.CTkFrame(tpl_frame, fg_color="transparent")
+        step_box.pack(fill="x", padx=15, pady=(0, 5))
+        self.step_tree = ttk.Treeview(step_box, columns=step_cols, show="headings", height=10)
         self.step_tree.heading("顺序", text="顺序")
-        self.step_tree.heading("音频文件", text="音频文件路径")
+        self.step_tree.heading("音频文件", text="音频文件真实位置")
         self.step_tree.heading("语速", text="语速")
         self.step_tree.column("顺序", width=48, anchor="center")
         self.step_tree.column("音频文件", width=200, anchor="w")
         self.step_tree.column("语速", width=52, anchor="center")
-        self.step_tree.pack(fill="x", padx=15, pady=(0, 5))
+        self.step_tree.pack(side="left", fill="both", expand=True)
+        step_vsb = ttk.Scrollbar(step_box, orient="vertical", command=self.step_tree.yview)
+        step_vsb.pack(side="right", fill="y")
+        self.step_tree.configure(yscrollcommand=step_vsb.set)
         self.step_tree.bind("<Double-1>", self.edit_step_cell)
 
         # 默认步骤
@@ -2581,7 +2918,7 @@ class BroadcastApp(ctk.CTk):
             ("11", "其他/号检票口检票进站。"),
         ]
         for num, content in default_steps:
-            self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+            self._step_insert("end", num, content, "1.00x")
         zebra(self.step_tree)
 
         # 绑定拖拽排序
@@ -2638,7 +2975,7 @@ class BroadcastApp(ctk.CTk):
 
     def add_step(self):
         """添加步骤（空内容，选中后用浏览按钮选择音频）"""
-        self.step_tree.insert("", "end", values=("新", "", "1.00x"))
+        self._step_insert("end", "新", "", "1.00x")
         self.renumber_steps()
         self.sync_steps_to_memory()
         self.save_bc_settings(silent=True)
@@ -2656,9 +2993,9 @@ class BroadcastApp(ctk.CTk):
         text = "{" + var + "}"
         if sel:
             idx = self.step_tree.index(sel[0])
-            self.step_tree.insert("", idx + 1, values=("新", text, "1.00x"))
+            self._step_insert(idx + 1, "新", text, "1.00x")
         else:
-            self.step_tree.insert("", "end", values=("新", text, "1.00x"))
+            self._step_insert("end", "新", text, "1.00x")
         self.renumber_steps()
         self.sync_steps_to_memory()
         self.save_bc_settings(silent=True)
@@ -2671,10 +3008,11 @@ class BroadcastApp(ctk.CTk):
             return
         from tkinter import simpledialog
         vals = self.step_tree.item(sel[0])["values"]
+        old_raw = self._step_raw_value(sel[0], vals)
         old_speed = str(vals[2]) if len(vals) > 2 else "1.00x"
         new = simpledialog.askstring("编辑步骤",
                                      f"步骤内容（{vals[0]}）：\n{{发站}}{{到站}}{{车次}}{{检票口}}{{站台}}{{停靠站台}} 是变量，也可填音频路径",
-                                     initialvalue=str(vals[1]), parent=self)
+                                     initialvalue=str(old_raw), parent=self)
         if new is not None:
             spd = simpledialog.askstring("编辑语速",
                                          "本步语速（如 1.0 / 1.2 / 0.8，留空 = 跟随整体语速）",
@@ -2686,7 +3024,8 @@ class BroadcastApp(ctk.CTk):
                 spd = f"{float(spd):.2f}x"
             except Exception:
                 spd = "1.00x"
-            self.step_tree.item(sel[0], values=(vals[0], new.strip(), spd))
+            self._step_raw[sel[0]] = str(new.strip())
+            self._step_refresh_display(sel[0], spd)
             self.renumber_steps()
             self.sync_steps_to_memory()
             self.save_bc_settings(silent=True)
@@ -2702,7 +3041,7 @@ class BroadcastApp(ctk.CTk):
         for child in self.step_tree.get_children():
             vals = self.step_tree.item(child)["values"]
             spd = vals[2] if len(vals) > 2 else "1.00x"
-            steps.append([str(vals[0]), str(vals[1]), str(spd)])
+            steps.append([str(vals[0]), self._step_raw_value(child, vals), str(spd)])
         cur = getattr(self, "_cur_bc_type", "检票预告")
         self.bc_steps[cur] = steps
 
@@ -2724,7 +3063,8 @@ class BroadcastApp(ctk.CTk):
             item = self.step_tree.item(child)
             vals = item["values"]
             spd = vals[2] if len(vals) > 2 else "1.00x"
-            self.step_tree.item(child, values=(str(i+1), vals[1], spd))
+            raw = self._step_raw_value(child, vals)
+            self.step_tree.item(child, values=(str(i+1), self._step_display(raw), spd))
         zebra(self.step_tree)
 
     def move_step_up(self):
@@ -2797,8 +3137,32 @@ class BroadcastApp(ctk.CTk):
         types[idx], types[nidx] = types[nidx], types[idx]
         self._bcast_types = types
         self.refresh_type_combos()
+        self._select_type_in_tree(cur)
         self.save_bc_settings(silent=True)
         self.set_status(f"类型顺序已更新：{cur}")
+
+    def _select_type_in_tree(self, name):
+        """在广播类型列表中选中指定类型（刷新后保持选中，方便连续上移/下移）"""
+        try:
+            for c in self.type_tree.get_children():
+                if str(self.type_tree.item(c)["values"][0]) == str(name):
+                    self.type_tree.selection_set(c)
+                    self.type_tree.see(c)
+                    break
+        except Exception:
+            pass
+
+    def sort_bcast_types(self):
+        """按内置推荐顺序重排全部广播类型：检票 → 晚点 → 停运 → 其他，自定义类型稳定排最后。"""
+        types = self.get_bcast_types()
+        ordered = sorted(types, key=bc_type_sort_key)
+        if ordered == types:
+            self.set_status("广播类型已是推荐顺序，无需调整")
+            return
+        self._bcast_types = ordered
+        self.refresh_type_combos()
+        self.save_bc_settings(silent=True)
+        self.set_status("广播类型已按推荐顺序重排并保存（检票 → 晚点 → 停运 → 其他）")
 
     def del_bcast_type(self):
         """删除广播类型（同步清理步骤配置）"""
@@ -2823,7 +3187,17 @@ class BroadcastApp(ctk.CTk):
         self.set_status(f"已删除广播类型：{cur}")
 
     def get_default_steps(self, choice):
-        """每种广播类型的默认步骤"""
+        """每种广播类型的默认步骤：优先读取 bcast_config.json 中已配置的真实语音包步骤，
+        避免代码里的旧路径（其他/紧急广播等）与实际语音包不一致导致“缺音频”。"""
+        try:
+            _p = os.path.join(get_project_root(), "bcast_config.json")
+            if os.path.exists(_p):
+                with open(_p, "r", encoding="utf-8") as _f:
+                    _st = (json.load(_f).get("steps") or {}).get(choice)
+                if _st:
+                    return [[str(x[0]), str(x[1]), (str(x[2]) if len(x) > 2 else "1.00x")] for x in _st]
+        except Exception:
+            pass
         defaults = {
             "检票预告": [
                 ("1", "其他/各位旅客请注意"),
@@ -2956,7 +3330,7 @@ class BroadcastApp(ctk.CTk):
             for child in self.step_tree.get_children():
                 vals = self.step_tree.item(child)["values"]
                 spd = vals[2] if len(vals) > 2 else "1.00x"
-                cur_steps.append([str(vals[0]), str(vals[1]), str(spd)])
+                cur_steps.append([str(vals[0]), self._step_raw_value(child, vals), str(spd)])
             self.bc_steps[self._cur_bc_type] = cur_steps
 
         # 记录当前类型
@@ -2972,12 +3346,13 @@ class BroadcastApp(ctk.CTk):
         # 刷新步骤树（兼容 2/3 元组步骤：语速列）
         for child in self.step_tree.get_children():
             self.step_tree.delete(child)
+        self._step_raw = {}
         for s in steps:
             if isinstance(s, (list, tuple)) and len(s) >= 3:
-                self.step_tree.insert("", "end", values=(s[0], s[1], s[2]))
+                self._step_insert("end", s[0], s[1], s[2])
             else:
                 num, content = s[0], s[1]
-                self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+                self._step_insert("end", num, content, "1.00x")
         zebra(self.step_tree)
 
     def browse_audio_file(self):
@@ -3007,13 +3382,24 @@ class BroadcastApp(ctk.CTk):
             if sel:
                 cur_vals = self.step_tree.item(sel[0])["values"]
                 spd = cur_vals[2] if len(cur_vals) > 2 else "1.00x"
-                self.step_tree.item(sel[0], values=(cur_vals[0], rel, spd))
+                self._step_raw[sel[0]] = str(rel)
+                self._step_refresh_display(sel[0], spd)
                 self.renumber_steps()
                 self.sync_steps_to_memory()
                 self.save_bc_settings(silent=True)
                 self.set_status(f"已选择：{rel}（已自动保存）")
             else:
                 self.set_status(f"已选择：{rel}（未选中步骤行）")
+
+    def _set_sound_path(self, attr, path, empty_text="点击添加文件"):
+        """更新开始音/结束音按钮：显示真实文件位置，缺失/打不开显示占位文字。"""
+        path = str(path or "").strip()
+        setattr(self, attr, path)
+        btn = self.start_sound_btn if attr == "_start_sound_value" else self.end_sound_btn
+        if not path:
+            btn.configure(text=empty_text)
+        else:
+            btn.configure(text=self._step_display(path))
 
     def browse_start_sound(self):
         """选择开始音（改完自动静默写入配置，不弹保存窗口）"""
@@ -3029,7 +3415,7 @@ class BroadcastApp(ctk.CTk):
                 rel = os.path.relpath(filename, AUDIO_DIR)
             except Exception:
                 rel = filename
-            self.start_sound_btn.configure(text=rel)
+            self._set_sound_path("_start_sound_value", rel)
             ok = self.save_sound_settings_silent()
             self.set_status(f"开始音：{rel}（已自动保存）" if ok else f"开始音：{rel}（保存失败）")
 
@@ -3046,7 +3432,7 @@ class BroadcastApp(ctk.CTk):
                 rel = os.path.relpath(filename, AUDIO_DIR)
             except Exception:
                 rel = filename
-            self.end_sound_btn.configure(text=rel)
+            self._set_sound_path("_end_sound_value", rel)
             ok = self.save_sound_settings_silent()
             self.set_status(f"结束音：{rel}（已自动保存）" if ok else f"结束音：{rel}（保存失败）")
 
@@ -3058,10 +3444,8 @@ class BroadcastApp(ctk.CTk):
             if os.path.exists(cfg_path):
                 with open(cfg_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f)
-            cfg["start_sound"] = self.start_sound_btn.cget("text")
-            cfg["end_sound"] = self.end_sound_btn.cget("text")
-            if cfg["end_sound"] == "无（点击选择）":
-                cfg["end_sound"] = ""
+            cfg["start_sound"] = getattr(self, "_start_sound_value", "")
+            cfg["end_sound"] = getattr(self, "_end_sound_value", "")
             with open(cfg_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
             return True
@@ -3216,26 +3600,7 @@ class BroadcastApp(ctk.CTk):
         ok = self.save_map_silent()
         self.set_status("字符映射已恢复默认（已自动保存）" if ok else "恢复失败")
 
-    # ===== 通用音频配置：启动音频 / 主界面播放音频 =====
-    def browse_startup_audio(self):
-        """浏览选择启动音频"""
-        import tkinter.filedialog as fd
-        filename = fd.askopenfilename(
-            title="选择启动音频",
-            initialdir=AUDIO_DIR,
-            filetypes=[("音频文件", "*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg"), ("所有文件", "*.*")]
-        )
-        if filename:
-            rel = self.to_rel_or_abs(filename)
-            ok, msg = self.validate_audio_path(rel)
-            if ok:
-                self.startup_audio_entry.delete(0, "end")
-                self.startup_audio_entry.insert(0, rel)
-                self.save_bc_settings(silent=True)
-                self.set_status(f"启动音频：{rel}（已自动保存）")
-            else:
-                self.set_status(f"启动音频校验失败：{msg}")
-
+    # ===== 主界面播放音频 =====
     def browse_main_audio(self):
         """浏览选择主界面播放音频"""
         import tkinter.filedialog as fd
@@ -3326,10 +3691,8 @@ class BroadcastApp(ctk.CTk):
 
     def reset_default_audio(self):
         """恢复默认音频配置"""
-        self.startup_audio_entry.delete(0, "end")
-        self.startup_audio_entry.insert(0, "tsy/tsy2.mp3")
         self.main_audio_entry.delete(0, "end")
-        self.set_status("已恢复默认音频（启动音频=tsy/tsy2.mp3，主界面播放音频=空）")
+        self.set_status("已恢复默认音频（主界面播放音频=空）")
 
     def play_single_audio(self, path):
         """播放单个音频文件（线程内 MCI，防并发）"""
@@ -3353,6 +3716,7 @@ class BroadcastApp(ctk.CTk):
             return
 
         self._playing = True
+        self._stop_flag = False   # 必须复位：上次“停止”留下的标志会让试听刚打开就关闭
 
         def do_play():
             try:
@@ -3828,17 +4192,19 @@ class BroadcastApp(ctk.CTk):
             vals = self.step_tree.item(child)["values"]
             spd = vals[2] if len(vals) > 2 else "1.00x"
             tree_steps.append((0, [vals[0], vals[1], spd]))
-        # 测试播放优先用当前选中车次（贴近真实广播），无则用测试值
+        # 测试播放优先用当前选中车次，其次用列表第一趟真实车次；没有车次就明确提示，不用假车次
+        tv = None
         if self.current_train and self.current_train.get("no"):
-            tv = {
-                "no": self.current_train.get("no", "G1234"),
-                "from": self.current_train.get("from", "杭州东"),
-                "to": self.current_train.get("to", "宁波"),
-                "gate": self.current_train.get("gate", "A1"),
-                "platform": self.current_train.get("platform", "3"),
-            }
+            tv = dict(self.current_train)
         else:
-            tv = {"no": "G1234", "from": "杭州东", "to": "宁波", "gate": "A1", "platform": "3"}
+            _kids = self.bc_train_tree.get_children()
+            if _kids:
+                _v = self.bc_train_tree.item(_kids[0])["values"]
+                if _v:
+                    tv = self._train_values_by_no(str(_v[0]))
+        if not tv:
+            self.set_status("测试播放失败：请先添加车次并选择")
+            return
         audio_list = self.resolve_audio_items(tree_steps, tv)
 
         if not audio_list:
@@ -3865,7 +4231,7 @@ class BroadcastApp(ctk.CTk):
         toolbar_inner.pack(fill="x", padx=12, pady=8)
 
         # 左边：标题
-        ctk.CTkLabel(toolbar_inner, text="🚄 广播控制台", font=ctk.CTkFont(size=15, weight="bold"),
+        ctk.CTkLabel(toolbar_inner, text="广播控制台", font=ctk.CTkFont(size=15, weight="bold"),
                     text_color=DS["accent"]).pack(side="left", padx=(5, 20))
 
         # 中间：快捷按钮
@@ -3877,13 +4243,13 @@ class BroadcastApp(ctk.CTk):
         ctk.CTkButton(toolbar_inner, text="- 删车次", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                      command=self.del_selected_train, **btn_style_tb).pack(side="left", padx=3)
 
-        ctk.CTkButton(toolbar_inner, text="🔄 刷新", fg_color=DS["btn"], hover_color=DS["btn_hover"],
+        ctk.CTkButton(toolbar_inner, text="刷新", fg_color=DS["btn"], hover_color=DS["btn_hover"],
                      command=self.refresh_trains, **btn_style_tb).pack(side="left", padx=3)
 
-        ctk.CTkButton(toolbar_inner, text="⇪ 批量导入", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
+        ctk.CTkButton(toolbar_inner, text="批量导入", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
                      command=self.import_trains_csv, **btn_style_tb).pack(side="left", padx=3)
 
-        ctk.CTkButton(toolbar_inner, text="⏹ 停止播放", fg_color="#555", hover_color="#777",
+        ctk.CTkButton(toolbar_inner, text="停止播放", fg_color="#555", hover_color="#777",
                      command=self.stop_all_audio, **btn_style_tb).pack(side="left", padx=3)
 
         # 右边：状态
@@ -3961,13 +4327,13 @@ class BroadcastApp(ctk.CTk):
         ctk.CTkLabel(right_frame, text="── 检票广播 ──", font=ctk.CTkFont(size=11),
                     text_color="#667").pack(pady=(5, 3))
 
-        ctk.CTkButton(right_frame, text="📢 检票预告", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
+        ctk.CTkButton(right_frame, text="检票预告", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
                      command=self.bcast_ticket_preview, **btn_style_big).pack(fill="x", padx=12, pady=4)
 
-        ctk.CTkButton(right_frame, text="✅ 开始检票", fg_color=DS["btn_success"], hover_color=DS["btn_success_hover"],
+        ctk.CTkButton(right_frame, text="开始检票", fg_color=DS["btn_success"], hover_color=DS["btn_success_hover"],
                      command=self.bcast_ticket_start, **btn_style_big).pack(fill="x", padx=12, pady=4)
 
-        ctk.CTkButton(right_frame, text="⏹ 停止检票", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
+        ctk.CTkButton(right_frame, text="停止检票", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                      command=self.bcast_ticket_stop, **btn_style_big).pack(fill="x", padx=12, pady=4)
 
                 # 紧急组：列车晚点 / 列车停运 / 其他 分组合并平铺（每行两个，点击即播）
@@ -3991,7 +4357,7 @@ class BroadcastApp(ctk.CTk):
                 _label = _typ.split("·")[-1].replace("紧急-", "")
                 if _label.endswith("（通用）"):
                     _label = "通用"
-                ctk.CTkButton(frame, text=f"🚨 {_label}",
+                ctk.CTkButton(frame, text=f"紧急 · {_label}",
                               fg_color=btn_color, hover_color=btn_hover,
                               command=lambda t=_typ: self.broadcast_emergency_type(t),
                               **emg_style).grid(row=_i // 2, column=_i % 2, sticky="ew", padx=2, pady=1)
@@ -4018,6 +4384,90 @@ class BroadcastApp(ctk.CTk):
         except Exception:
             pass
         return p
+
+    def sort_train_tree(self):
+        """按当前排序模式重排主车次列表（增量更新，不整表删除重建）。
+        保持行 iid、选中项和滚动位置，状态变化时只改单元格，不产生“乱跳”。"""
+        try:
+            tree = self.bc_train_tree
+            children = list(tree.get_children())
+            if not children:
+                return
+            existing = {}
+            for c in children:
+                vals = list(tree.item(c)["values"])
+                vals = vals + [""] * (9 - len(vals)) if len(vals) < 9 else vals[:9]
+                key = str(vals[0]).strip()
+                if key:
+                    existing[key] = (c, vals)
+
+            _smin = 5
+            if hasattr(self, "stop_min_entry"):
+                try:
+                    _smin = max(1, int(float(self.stop_min_entry.get().strip() or "5")))
+                except Exception:
+                    _smin = 5
+
+            # 以现有行数据为源，按统一规则排序（时间模式下状态变化不影响位置）
+            rows = self._screen_sorted_rows([v for _, v in existing.values()], _smin)
+            for _r in rows:
+                if len(_r) > 7:
+                    _r[7] = effective_train_status(_r, _smin)
+            desired_keys = [str(r[0]).strip() for r in rows]
+
+            sel_ids = [c for c in tree.selection() if tree.exists(c)]
+            yview = tree.yview()
+
+            # 删除已不存在的车次
+            for key, (iid, _vals) in list(existing.items()):
+                if key not in desired_keys:
+                    try:
+                        tree.delete(iid)
+                    except Exception:
+                        pass
+                    existing.pop(key, None)
+
+            # 更新已有行（仅内容变化时写入），缺失行追加到末尾
+            ordered_iids = []
+            for vals in rows:
+                key = str(vals[0]).strip()
+                if key in existing:
+                    iid, _old = existing[key]
+                    cur = list(tree.item(iid)["values"])
+                    cur = cur + [""] * (9 - len(cur)) if len(cur) < 9 else cur[:9]
+                    if tuple(cur) != tuple(vals):
+                        tree.item(iid, values=tuple(vals))
+                else:
+                    iid = tree.insert("", "end", values=tuple(vals))
+                    existing[key] = (iid, list(vals))
+                ordered_iids.append(iid)
+
+            # 只有顺序确实变化才 move，避免每次刷新触发视觉抖动
+            current_order = [c for c in tree.get_children() if c in set(ordered_iids)]
+            if current_order != ordered_iids:
+                for idx, iid in enumerate(ordered_iids):
+                    tree.move(iid, "", idx)
+
+            zebra(tree)
+            self.apply_train_status_colors()
+
+            # 恢复选中与滚动位置；只有选中真的变化时才重设，避免每次刷新触发选中行重绘/详情区重载
+            valid_sel = [c for c in sel_ids if tree.exists(c)]
+            if valid_sel and tuple(tree.selection()) != tuple(valid_sel):
+                tree.selection_set(valid_sel)
+            if valid_sel:
+                try:
+                    if not tree.bbox(valid_sel[0]):
+                        tree.see(valid_sel[0])
+                except Exception:
+                    pass
+            try:
+                if abs(tree.yview()[0] - yview[0]) > 0.0005:
+                    tree.yview_moveto(yview[0])
+            except Exception:
+                pass
+        except Exception as _e:
+            self.set_status(f"车次列表刷新失败：{_e}")
 
     def save_trains_data(self):
         """把当前车次列表持久化到 trains.json（写入前自动备份）"""
@@ -4052,6 +4502,7 @@ class BroadcastApp(ctk.CTk):
                     continue
                 self.bc_train_tree.insert("", "end", values=tuple(rr))
                 existing.add(str(rr[0]))
+            self.sort_train_tree()
             return True
         except Exception:
             return False
@@ -4102,7 +4553,11 @@ class BroadcastApp(ctk.CTk):
                        fields["站台"].get().strip(),
                        fields["状态"].get().strip() or "待检票",
                        fields["到点"].get().strip() or "--:--")
+                if self._train_no_exists(no):
+                    messagebox.showerror("车次重复", f"车次 {no} 已存在，请勿重复添加。", parent=dlg)
+                    return
                 self.bc_train_tree.insert("", "end", values=row)
+                self.sort_train_tree()
                 zebra(self.bc_train_tree)
                 self.save_trains_data()
                 self.load_trains()   # 同步车辆管理面板，立即可见
@@ -4189,6 +4644,9 @@ class BroadcastApp(ctk.CTk):
                 if target is None:
                     self.set_status("原车次行已被刷新，请重新选择车次再更新")
                     return
+                if self._train_no_exists(no, exclude=old_no):
+                    messagebox.showerror("车次重复", f"车次 {no} 已存在，请换一个车次号。", parent=dlg)
+                    return
                 self.train_tree.item(target, values=row)
                 self.sync_train_to_main()
                 self.set_status(f"车次 {no} 已更新")
@@ -4219,16 +4677,105 @@ class BroadcastApp(ctk.CTk):
             pass
         self.after(10000, self._train_auto_refresh)
 
+    def reload_trains_data(self):
+        """从 trains.json 增量合并到主列表：不整表清空，刷新时无闪烁。"""
+        path = self.get_trains_path()
+        if not os.path.exists(path):
+            return False
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                src = json.load(f)
+        except Exception as e:
+            self.set_status(f"车次读取失败：{e}")
+            return False
+
+        rows = []
+        seen = set()
+        _smin = 5
+        if hasattr(self, "stop_min_entry"):
+            try:
+                _smin = max(1, int(float(self.stop_min_entry.get().strip() or "5")))
+            except Exception:
+                _smin = 5
+        for r in src:
+            rr = list(r)
+            if len(rr) < 9:
+                rr = rr + ["--:--"] * (9 - len(rr))
+            key = str(rr[0]).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            # 先把文件里的原始状态换算成界面实际显示状态，再和树里的值比较。
+            # 否则每次刷新都会“先写原始状态、再写自动状态”，同一行被改两次，
+            # 在 Treeview 上就是肉眼可见的一闪。
+            try:
+                rr[7] = effective_train_status(rr, _smin)
+            except Exception:
+                pass
+            rows.append(rr[:9])
+
+        tree = self.bc_train_tree
+        _before = []
+        for _c in tree.get_children():
+            try:
+                _before.append((_c, tuple(tree.item(_c)["values"]), tuple(tree.item(_c)["tags"])))
+            except Exception:
+                pass
+        existing = {}
+        for c in tree.get_children():
+            vals = list(tree.item(c)["values"])
+            if vals:
+                existing[str(vals[0]).strip()] = (c, vals)
+
+        for key in list(existing.keys()):
+            if key not in seen:
+                try:
+                    tree.delete(existing[key][0])
+                except Exception:
+                    pass
+                existing.pop(key, None)
+
+        for rr in rows:
+            key = str(rr[0]).strip()
+            if key in existing:
+                iid, old = existing[key]
+                if tuple(old) != tuple(rr):
+                    tree.item(iid, values=tuple(rr))
+            else:
+                tree.insert("", "end", values=tuple(rr))
+
+        self.sort_train_tree()
+        _after = []
+        for _c in tree.get_children():
+            try:
+                _after.append((_c, tuple(tree.item(_c)["values"]), tuple(tree.item(_c)["tags"])))
+            except Exception:
+                pass
+        changed = _before != _after
+        if getattr(self, "current_train", None):
+            no = str(self.current_train.get("no", "") or "").strip()
+            if no and no not in seen:
+                self.current_train = None
+                if hasattr(self, "current_train_label"):
+                    self.current_train_label.configure(text="未选择车次")
+        return changed
+
     def refresh_trains(self):
-        """刷新车次列表（从 trains.json 重载）"""
-        self.set_status("刷新车次列表...")
-        for c in self.bc_train_tree.get_children():
-            self.bc_train_tree.delete(c)
-        self.load_trains_data()
-        zebra(self.bc_train_tree)
-        self.current_train = None
-        self.current_train_label.configure(text="未选择车次")
-        self.set_status("车次列表已刷新")
+        """刷新车次列表：只更新有变化的单元格，只刷新当前可见的面板。"""
+        changed = self.reload_trains_data()
+        # 只刷新用户当前看得到的页面，避免隐藏页面重建控件造成整窗重绘闪烁
+        try:
+            if self.train_panel.winfo_ismapped():
+                self.load_trains()
+        except Exception:
+            pass
+        try:
+            if self.screen_panel.winfo_ismapped():
+                self.refresh_screen(silent=True)
+        except Exception:
+            pass
+        if changed:
+            self.set_status("车次列表已刷新")
 
     def import_trains_csv(self):
         """车次批量导入：CSV/文本文件（一行一车次，9 列：车次/类型/发站/到站/开点/检票口/站台/状态/到点）
@@ -4341,7 +4888,7 @@ class BroadcastApp(ctk.CTk):
                 existing.add(no)
                 added += 1
             if added:
-                zebra(self.bc_train_tree)
+                self.sort_train_tree()
                 self.save_trains_data()
                 self.load_trains()
             try:
@@ -4366,13 +4913,26 @@ class BroadcastApp(ctk.CTk):
             if not messagebox.askyesno("删除车次", "确定删除选中的车次吗？"):
                 return
             self.bc_train_tree.delete(sel)
-            zebra(self.bc_train_tree)
-            self.save_trains_data()
             self.current_train = None
             self.current_train_label.configure(text="未选择车次")
+            zebra(self.bc_train_tree)
+            self.sort_train_tree()
+            self.save_trains_data()
             self.set_status("已删除车次")
         else:
             self.set_status("请先选择车次")
+
+    def _select_train_in_main(self, no):
+        """按车次号选中主列表车次（供全局音频测试/程序内调用），并同步 current_train。"""
+        no = str(no or "").strip()
+        for c in self.bc_train_tree.get_children():
+            vals = list(self.bc_train_tree.item(c)["values"])
+            if vals and str(vals[0]).strip() == no:
+                self.bc_train_tree.selection_set(c)
+                self.bc_train_tree.see(c)
+                self.on_train_select(None)
+                return True
+        return False
 
     def on_train_select(self, event):
         """选中车次（列: 车次/类型/发站/到站/开点/检票口/站台/状态）"""
@@ -4403,8 +4963,9 @@ class BroadcastApp(ctk.CTk):
         audio_path = os.path.abspath(audio_path)
         self.play_audio_file("media3/" + subdir + "/" + audio_name + ".mp3")
 
-    def build_audio_list_from_steps(self, type_name, steps_override=None):
-        """根据配置步骤（或手动排序步骤） + 当前车次，构建音频片段列表"""
+    def build_audio_list_from_steps(self, type_name, steps_override=None, train_values=None):
+        """根据配置步骤（或手动排序步骤） + 车次信息，构建音频片段列表。
+        不再用“杭州东/宁波/G1234”测试值兜底：缺字段就跳过对应片段，避免播出假车次。"""
         # 播放前强制同步：面板里的修改（即使未点保存）立即生效
         self.sync_steps_to_memory()
         # 读配置步骤（手动排序窗口可传入 steps_override）
@@ -4416,20 +4977,8 @@ class BroadcastApp(ctk.CTk):
         if not steps:
             steps = self.get_default_steps(type_name)
 
-        # 测试值兜底（未选车次时）
-        test_from = "杭州东" if not (self.current_train and self.current_train.get("from")) else self.current_train["from"]
-        test_to = "宁波" if not (self.current_train and self.current_train.get("to")) else self.current_train["to"]
-        test_no = "G1234" if not (self.current_train and self.current_train.get("no")) else self.current_train["no"]
-        test_gate = "A1" if not (self.current_train and self.current_train.get("gate")) else self.current_train["gate"]
-
-        values = {
-            "no": test_no,
-            "from": test_from,
-            "to": test_to,
-            "gate": test_gate,
-            "platform": self.current_train.get("platform") if self.current_train else "3",
-            "delay": getattr(self, "_delay_min", ""),
-        }
+        values = dict(train_values if train_values is not None else (self.current_train or {}))
+        values.setdefault("delay", getattr(self, "_delay_min", ""))
         return self.resolve_audio_items(steps, values)
 
     def bcast_ticket_preview(self):
@@ -4464,6 +5013,9 @@ class BroadcastApp(ctk.CTk):
 
     def bcast_ticket_stop(self):
         """停止检票：按广播设置里配置的步骤播放"""
+        if not self.current_train:
+            self.set_status("请先选择车次！")
+            return
         self.bc_status_dot.configure(text="● 广播中", text_color="#f80")
         self.set_status("停止检票")
         if self.current_train:
@@ -4473,24 +5025,65 @@ class BroadcastApp(ctk.CTk):
         audio_list = self.build_audio_list_from_steps("停止检票")
         self.play_concat_audio(audio_list, btype="停止检票")
 
+    def _train_no_exists(self, no, exclude=None):
+        """车次号是否已存在（exclude=编辑前的车次号，允许保持原号不变）"""
+        no = str(no or "").strip()
+        ex = str(exclude or "").strip()
+        if not no:
+            return False
+        for c in self.bc_train_tree.get_children():
+            v = self.bc_train_tree.item(c)["values"]
+            if v and str(v[0]).strip() == no and str(v[0]).strip() != ex:
+                return True
+        return False
+
+    def _train_values_by_no(self, no):
+        """按车次号从主列表取完整车次信息（发站/到站/检票口/站台/开点），取不到返回 None。
+        自动广播/定时广播必须用这里的数据，不能再退化成“杭州东→宁波/G1234”测试值。"""
+        no = str(no or "").strip()
+        if not no:
+            return None
+        try:
+            for c in self.bc_train_tree.get_children():
+                vals = list(self.bc_train_tree.item(c)["values"])
+                if vals and str(vals[0]).strip() == no:
+                    if len(vals) < 9:
+                        vals += [""] * (9 - len(vals))
+                    return {"no": str(vals[0]).strip(),
+                            "from": str(vals[2]).strip(),
+                            "to": str(vals[3]).strip(),
+                            "dep": str(vals[4]).strip(),
+                            "gate": str(vals[5]).strip(),
+                            "platform": str(vals[6]).strip()}
+        except Exception:
+            pass
+        return None
+
     def bcast_emergency(self):
-        """紧急广播（列车晚点）"""
+        """紧急广播（列车晚点·通用）"""
+        if not self.current_train:
+            self.set_status("请先选择车次！")
+            return
         self.bc_status_dot.configure(text="● 广播中", text_color="#f80")
         self.set_status("紧急广播")
-        audio_list = self.build_audio_list_from_steps("紧急-列车晚点")
-        self.play_concat_audio(audio_list, emergency=True, btype="紧急-列车晚点")
+        audio_list = self.build_audio_list_from_steps("紧急-列车晚点（通用）")
+        self.play_concat_audio(audio_list, emergency=True, btype="紧急-列车晚点（通用）")
 
     def broadcast_emergency_type(self, emg_type):
-        """按类型播放紧急广播（从配置步骤读取，自动带开始音/结束音）
-        晚点/停运类型触发时同步选中车次状态到大屏（持续性状态，播完不恢复）
-        所有晚点类型都会先弹出输入框输入晚点小时/分钟（可留空，留空则不读对应单位），
-        用新语音包"晚点/已知时间晚点/"动态构建步骤"""
+        """按类型播放紧急广播：优先使用广播设置里配置的步骤，晚点类型再按输入的小时/分钟补充时间语音。
+        晚点/停运/变更站台必须先选车次，避免用测试车次播错内容。"""
+        # 需要车次信息的类型：未选车次直接拦截
+        if any(k in emg_type for k in ("晚点", "停运", "变更站台")) and not self.current_train:
+            self.set_status("请先选择车次！")
+            self.bc_status_dot.configure(text="● 系统就绪", text_color="#4d4")
+            return
+
         # 晚点类型：先让用户输入晚点小时/分钟
         if "晚点" in emg_type:
             _ans = self.ask_delay_time()
             if _ans is None:
                 self.set_status("已取消：未输入晚点时间")
-                self.bc_status_dot.configure(text="● 就绪", text_color="#4a4")
+                self.bc_status_dot.configure(text="● 系统就绪", text_color="#4d4")
                 return
             self._delay_hour = str(_ans[0]).strip()
             self._delay_min = str(_ans[1]).strip()
@@ -4506,6 +5099,8 @@ class BroadcastApp(ctk.CTk):
         else:
             self.set_status(f"紧急广播：{emg_type}")
 
+        # 先取完整车次信息，再更新状态（避免状态改动后取到空值）
+        values = dict(self.current_train) if self.current_train else {}
         if self.current_train:
             no = self.current_train["no"]
             if "晚点" in emg_type:
@@ -4513,14 +5108,81 @@ class BroadcastApp(ctk.CTk):
             elif "停运" in emg_type:
                 self._set_train_state(no, "停运", keep=True)
 
+        self.sync_steps_to_memory()
+        steps = self.bc_steps.get(emg_type) or self.get_default_steps(emg_type)
         if "晚点" in emg_type:
-            # 动态构建步骤：用新语音包（晚点/已知时间晚点/），小时/分钟空则不读对应单位
-            steps = self._build_delay_known_steps(emg_type)
-            values = self.current_train or {}
+            steps = self._prepare_delay_steps(steps)
+            if not steps:
+                steps = self._build_delay_known_steps(emg_type)
             audio_list = self.resolve_audio_items(steps, values)
         else:
-            audio_list = self.build_audio_list_from_steps(emg_type)
+            audio_list = self.resolve_audio_items(steps, values) if steps else []
+
+        if not audio_list:
+            self.set_status(f"紧急广播 {emg_type}：没有可播放的音频，请检查广播设置")
+            self.bc_status_dot.configure(text="● 系统就绪", text_color="#4d4")
+            return
         self.play_concat_audio(audio_list, emergency=True, btype=emg_type)
+
+    def _prepare_delay_steps(self, steps):
+        """把配置步骤中的晚点时间变量展开成 小时/时 + 分钟/分：
+        - 兼容旧配置的 {晚点时间}；
+        - 已有 {晚点小时}/{晚点分钟} 时按输入值保留，空值连同单位一起跳过；
+        - 配置里没有时间占位符但用户输入了时间时，自动补在末尾。"""
+        h = str(getattr(self, "_delay_hour", "") or "").strip()
+        m = str(getattr(self, "_delay_min", "") or "").strip()
+        src = [list(s) for s in (steps or [])]
+        out = []
+        had_time = any("{晚点" in str(s[1]) for s in src if len(s) > 1)
+        i = 0
+        while i < len(src):
+            s = src[i]
+            c = str(s[1]) if len(s) > 1 else ""
+            if c == "{晚点时间}":
+                if h:
+                    out.append(["", "{晚点小时}", "1.00x"])
+                    out.append(["", "时间/时", "1.00x"])
+                if m:
+                    out.append(["", "{晚点分钟}", "1.00x"])
+                    out.append(["", "时间/分", "1.00x"])
+                # 旧配置在占位符后面还跟了一个固定的“分钟”尾音，已被上面的“时/分”替代，跳过
+                if i + 1 < len(src) and str(src[i + 1][1]).endswith("/9分钟"):
+                    i += 2
+                else:
+                    i += 1
+                continue
+            if c == "{晚点小时}":
+                if h:
+                    out.append(["", c, s[2] if len(s) > 2 else "1.00x"])
+                    if i + 1 < len(src) and "时" in str(src[i + 1][1]):
+                        out.append(list(src[i + 1]))
+                        i += 1
+                i += 1
+                continue
+            if c == "{晚点分钟}":
+                if m:
+                    out.append(["", c, s[2] if len(s) > 2 else "1.00x"])
+                    if i + 1 < len(src) and "分" in str(src[i + 1][1]):
+                        out.append(list(src[i + 1]))
+                        i += 1
+                i += 1
+                continue
+            # 未输入时间时，去掉“预计晚点”“分钟”这类无意义的尾句
+            if not (h or m) and (str(c).endswith("预计晚点") or str(c).endswith("/9分钟")):
+                i += 1
+                continue
+            out.append(list(s))
+            i += 1
+        if not had_time and (h or m):
+            if h:
+                out.append(["", "{晚点小时}", "1.00x"])
+                out.append(["", "时间/时", "1.00x"])
+            if m:
+                out.append(["", "{晚点分钟}", "1.00x"])
+                out.append(["", "时间/分", "1.00x"])
+        for idx, s in enumerate(out, start=1):
+            s[0] = str(idx)
+        return out
 
     def _build_delay_known_steps(self, emg_type):
         """动态构建"紧急-列车晚点·已知时间"播放步骤：
@@ -4586,6 +5248,12 @@ class BroadcastApp(ctk.CTk):
                 if m and not m.isdigit():
                     messagebox.showerror("输入有误", "分钟请输入数字（如 30、45）", parent=dlg)
                     return
+                if h and not (0 <= int(h) <= 99):
+                    messagebox.showerror("输入有误", "小时请输入 0-99 之间的数字", parent=dlg)
+                    return
+                if m and not (0 <= int(m) <= 59):
+                    messagebox.showerror("输入有误", "分钟请输入 0-59 之间的数字", parent=dlg)
+                    return
                 result["v"] = (h, m)
                 dlg.destroy()
 
@@ -4603,23 +5271,32 @@ class BroadcastApp(ctk.CTk):
         return result.get("v")
 
     def simple_broadcast(self, name):
-        """简单广播：直接播放对应的完整音频文件"""
+        """简单广播：优先按广播设置为该类型配置的步骤播放（带开始/结束音）；
+        只有找不到配置时才回退到单个音频文件。"""
         self.bc_status_dot.configure(text="● 广播中", text_color="#f80")
         self.set_status(f"正在广播：{name}")
+        if name in self.get_bcast_types() or name in getattr(self, "bc_steps", {}):
+            audio_list = self.build_audio_list_from_steps(name)
+            if audio_list:
+                self.play_concat_audio(audio_list, btype=name, source="手动")
+                return
+            self.set_status(f"广播 {name} 没有可播放的音频，请检查广播设置")
+            self.bc_status_dot.configure(text="● 系统就绪", text_color="#4d4")
+            return
 
-        # 音频文件映射
+        # 兼容旧调用：完整音频文件
         audio_map = {
             "检票预告": "其他/旅客们，你们好。由",
             "开始检票": "其他/现在开始检票，请持有该车车票的",
             "停止检票": "紧急广播/停止检票",
             "紧急广播": "紧急广播/列车晚点",
         }
-
         if name in audio_map:
             self.play_audio_file("media3/" + audio_map[name] + ".mp3")
-
-        # 3秒后恢复
-        self.after(3000, lambda: self.bc_status_dot.configure(text="● 就绪", text_color="#4a4"))
+            self.after(3000, lambda: self.bc_status_dot.configure(text="● 就绪", text_color="#4a4"))
+        else:
+            self.set_status(f"未知广播类型：{name}")
+            self.bc_status_dot.configure(text="● 系统就绪", text_color="#4d4")
 
     def play_manual(self):
         """手动播放：输入文件名则播放该文件；为空且有主界面播放音频配置则播放配置音频"""
@@ -4699,7 +5376,7 @@ class BroadcastApp(ctk.CTk):
         dlg.grid_columnconfigure(0, weight=1)
         dlg.grid_rowconfigure(2, weight=1)
 
-        ctk.CTkLabel(dlg, text="🔄 手动播放（排序模式）", font=ctk.CTkFont(size=15, weight="bold"),
+        ctk.CTkLabel(dlg, text="手动播放（排序模式）", font=ctk.CTkFont(size=15, weight="bold"),
                      text_color=DS["accent"]).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 2))
         ctk.CTkLabel(dlg, text="每行一步：音频文件或 {变量}；双击可编辑内容与语速；播放时按顺序依次合成",
                      font=ctk.CTkFont(size=11), text_color=DS["text_dim"]).grid(row=1, column=0, sticky="w", padx=16, pady=(0, 8))
@@ -4723,7 +5400,7 @@ class BroadcastApp(ctk.CTk):
         # 编辑按钮行
         edit_row = ctk.CTkFrame(dlg, fg_color="transparent")
         edit_row.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 6))
-        ctk.CTkButton(edit_row, text="📁 浏览选择音频...", height=30, fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
+        ctk.CTkButton(edit_row, text="浏览选择音频...", height=30, fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
                       font=ctk.CTkFont(size=11), command=self.manual_add_file).pack(side="left", fill="x", expand=True, padx=(0, 3))
         ctk.CTkButton(edit_row, text="＋ 变量", width=80, height=30, fg_color="#7a5a1e", hover_color="#9a7a2a",
                       font=ctk.CTkFont(size=11), command=self.manual_insert_var).pack(side="left", padx=(3, 0))
@@ -4741,9 +5418,9 @@ class BroadcastApp(ctk.CTk):
         play_row.grid(row=5, column=0, sticky="ew", padx=16, pady=(6, 12))
         ctk.CTkButton(play_row, text="▶ 播放", height=34, fg_color=DS["btn_success"], hover_color=DS["btn_success_hover"],
                       font=ctk.CTkFont(size=12, weight="bold"), command=self.play_manual_steps).pack(side="left", fill="x", expand=True, padx=(0, 3))
-        ctk.CTkButton(play_row, text="⏹ 停止", height=34, fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
+        ctk.CTkButton(play_row, text="停止", height=34, fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                       font=ctk.CTkFont(size=12), command=self.stop_all_audio).pack(side="left", fill="x", expand=True, padx=(3, 3))
-        ctk.CTkButton(play_row, text="💾 保存顺序", height=34, fg_color="#555", hover_color="#777",
+        ctk.CTkButton(play_row, text="保存顺序", height=34, fg_color="#555", hover_color="#777",
                       font=ctk.CTkFont(size=12), command=self.save_manual_steps).pack(side="left", fill="x", expand=True, padx=(3, 0))
 
     def manual_add_file(self):
@@ -4891,11 +5568,20 @@ class BroadcastApp(ctk.CTk):
             else:
                 self.sched_type_cmb.set(types[0] if types else "")
         if hasattr(self, "type_tree") and self.type_tree.winfo_exists():
+            _sel_name = ""
+            try:
+                _sel = self.type_tree.selection()
+                if _sel:
+                    _sel_name = str(self.type_tree.item(_sel[0])["values"][0])
+            except Exception:
+                pass
             for c in self.type_tree.get_children():
                 self.type_tree.delete(c)
             for typ in types:
                 self.type_tree.insert("", "end", values=(typ,))
             zebra(self.type_tree)
+            if _sel_name:
+                self._select_type_in_tree(_sel_name)
 
     def get_config_path(self):
         """配置文件路径（固定放在项目根目录，不随音频目录/打包目录变化）"""
@@ -4945,11 +5631,12 @@ class BroadcastApp(ctk.CTk):
             if not cfg:
                 return
 
-        # 开始音/结束音
-        if cfg.get("start_sound"):
-            self.start_sound_btn.configure(text=cfg["start_sound"])
-        if cfg.get("end_sound"):
-            self.end_sound_btn.configure(text=cfg["end_sound"])
+        # 开始音/结束音（显示真实位置；缺失文件显示“点击添加文件”）
+        if "start_sound" in cfg:
+            self._set_sound_path("_start_sound_value", cfg.get("start_sound", ""))
+        if "end_sound" in cfg:
+            self._set_sound_path("_end_sound_value", cfg.get("end_sound", ""),
+                                 "无（点击选择）")
 
         # 语速
         try:
@@ -4962,16 +5649,28 @@ class BroadcastApp(ctk.CTk):
         except Exception:
             pass
         if hasattr(self, "station_entry"):
+            _st = str(cfg.get("station_name", "") or "").strip()
+            if not _st:
+                try:
+                    _st = str(self.load_sys_config().get("station_name", "") or "").strip()
+                except Exception:
+                    _st = ""
             self.station_entry.delete(0, "end")
-            self.station_entry.insert(0, str(cfg.get("station_name", "丽水站")))
+            self.station_entry.insert(0, _st or "丽水站")
         if hasattr(self, "stop_min_entry"):
             self.stop_min_entry.delete(0, "end")
             self.stop_min_entry.insert(0, str(cfg.get("stop_check_min", 5)))
 
-        # 启动音频 / 主界面播放音频（通用音频配置）
-        if hasattr(self, "startup_audio_entry"):
-            self.startup_audio_entry.delete(0, "end")
-            self.startup_audio_entry.insert(0, cfg.get("startup_audio", "tsy/tsy2.mp3"))
+        # 大屏排序方式（time=按开点时间，status=按状态优先）
+        try:
+            _sm = str(cfg.get("screen_sort", "time") or "time")
+            self._screen_sort_mode = "status" if _sm == "status" else "time"
+            if hasattr(self, "screen_sort_menu"):
+                self.screen_sort_menu.set("按状态优先" if self._screen_sort_mode == "status" else "按开点时间")
+        except Exception:
+            pass
+
+        # 启动音频功能已移除：主界面/启动时不再自动播放任何音频
         if hasattr(self, "main_audio_entry"):
             self.main_audio_entry.delete(0, "end")
             self.main_audio_entry.insert(0, cfg.get("main_audio", ""))
@@ -5000,12 +5699,13 @@ class BroadcastApp(ctk.CTk):
                 steps = self.bc_steps.get(cur_type) or self.get_default_steps(cur_type)
                 for child in self.step_tree.get_children():
                     self.step_tree.delete(child)
+                self._step_raw = {}
                 for s in steps:
                     if isinstance(s, (list, tuple)) and len(s) >= 3:
-                        self.step_tree.insert("", "end", values=(s[0], s[1], s[2]))
+                        self._step_insert("end", s[0], s[1], s[2])
                     else:
                         num, content = s[0], s[1]
-                        self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+                        self._step_insert("end", num, content, "1.00x")
                 zebra(self.step_tree)
                 self._cur_bc_type = cur_type
 
@@ -5048,23 +5748,21 @@ class BroadcastApp(ctk.CTk):
             if typ not in self.bc_steps:
                 self.bc_steps[typ] = [list(s) for s in self.get_default_steps(typ)]
 
-        cfg = {}
-
-        # 保留定时广播配置（防止本次保存覆盖丢失）
-        _sched_old = []
+        _old_cfg = {}
         try:
-            if os.path.exists(self.get_config_path()):
-                with open(self.get_config_path(), encoding="utf-8") as _f:
-                    _old_cfg = json.load(_f)
-                _sched_old = _old_cfg.get("schedule") or []
+            _p = self.get_config_path()
+            if os.path.exists(_p):
+                with open(_p, encoding="utf-8") as _f:
+                    _old_cfg = json.load(_f) or {}
         except Exception:
-            pass
+            _old_cfg = {}
+        # 以旧配置为底：保留 manual_steps、screen_sort 以及未来版本新增的未知键，避免保存一次就丢配置
+        cfg = dict(_old_cfg)
+        _sched_old = _old_cfg.get("schedule") or []
 
-        # 开始音/结束音
-        cfg["start_sound"] = self.start_sound_btn.cget("text")
-        cfg["end_sound"] = self.end_sound_btn.cget("text")
-        if cfg["end_sound"] == "无（点击选择）":
-            cfg["end_sound"] = ""
+        # 开始音/结束音（保存真实路径，不保存占位文字）
+        cfg["start_sound"] = getattr(self, "_start_sound_value", "")
+        cfg["end_sound"] = getattr(self, "_end_sound_value", "")
 
         # 语速
         try:
@@ -5081,8 +5779,8 @@ class BroadcastApp(ctk.CTk):
             except Exception:
                 cfg["stop_check_min"] = 5
 
-        # 启动音频 / 主界面播放音频（通用音频配置）
-        cfg["startup_audio"] = self.startup_audio_entry.get().strip() if hasattr(self, "startup_audio_entry") else ""
+        # 启动音频功能已移除，不再保存/播放
+        cfg.pop("startup_audio", None)
         cfg["main_audio"] = self.main_audio_entry.get().strip() if hasattr(self, "main_audio_entry") else ""
 
         # 每条广播间隔（队列播放时生效）
@@ -5125,6 +5823,8 @@ class BroadcastApp(ctk.CTk):
 
         # 广播类型列表（自定义排序/添加后持久化）
         cfg["bcast_types"] = self.get_bcast_types()
+        # 大屏排序方式（重启后保持用户选择）
+        cfg["screen_sort"] = getattr(self, "_screen_sort_mode", "time")
 
         # 空步骤提示（不阻止保存，播放时会跳过）
         empty_count = 0
@@ -5166,12 +5866,13 @@ class BroadcastApp(ctk.CTk):
                     if steps:
                         for child in self.step_tree.get_children():
                             self.step_tree.delete(child)
+                        self._step_raw = {}
                         for s in steps:
                             if isinstance(s, (list, tuple)) and len(s) >= 3:
-                                self.step_tree.insert("", "end", values=(s[0], s[1], s[2]))
+                                self._step_insert("end", s[0], s[1], s[2])
                             else:
                                 num, content = s[0], s[1]
-                                self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+                                self._step_insert("end", num, content, "1.00x")
                         self.renumber_steps()
                         self.sync_steps_to_memory()
                         loaded = True
@@ -5182,8 +5883,9 @@ class BroadcastApp(ctk.CTk):
             cur_type = getattr(self, "_cur_bc_type", "检票预告")
             for child in self.step_tree.get_children():
                 self.step_tree.delete(child)
+            self._step_raw = {}
             for num, content in self.get_default_steps(cur_type):
-                self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+                self._step_insert("end", num, content, "1.00x")
             self.renumber_steps()
             self.sync_steps_to_memory()
         self.set_status("已取消修改，恢复为已保存配置")
@@ -5195,8 +5897,9 @@ class BroadcastApp(ctk.CTk):
         cur_type = getattr(self, "_cur_bc_type", "检票预告")
         for child in self.step_tree.get_children():
             self.step_tree.delete(child)
+        self._step_raw = {}
         for num, content in self.get_default_steps(cur_type):
-            self.step_tree.insert("", "end", values=(num, content, "1.00x"))
+            self._step_insert("end", num, content, "1.00x")
         self.renumber_steps()
         self.sync_steps_to_memory()
         self.set_status(f"已恢复 {cur_type} 为默认步骤")
@@ -5252,14 +5955,16 @@ class BroadcastApp(ctk.CTk):
         selected = self.bc_train_tree.selection()
         if selected:
             item = self.bc_train_tree.item(selected[0])
-            vals = item["values"]
+            vals = list(item["values"])
+            if len(vals) < 9:
+                vals += [""] * (9 - len(vals))
             train_no = vals[0]
             self.current_train = {
                 "no": train_no,
                 "from": vals[2],
                 "to": vals[3],
-                "gate": vals[5] if len(vals) > 5 else "A1",
-                "platform": vals[6] if len(vals) > 6 else "",
+                "gate": vals[5],
+                "platform": vals[6],
             }
             self.set_status(f"已选择：{train_no}")
 
@@ -5277,7 +5982,9 @@ class BroadcastApp(ctk.CTk):
         elif broadcast_type == "停止检票广播":
             self.bcast_ticket_stop()
         elif broadcast_type == "列车晚点":
-            self.broadcast_emergency_type("紧急-列车晚点")
+            self.broadcast_emergency_type("紧急-列车晚点（通用）")
+        elif str(broadcast_type).startswith("紧急-"):
+            self.broadcast_emergency_type(broadcast_type)
         else:
             self.simple_broadcast(broadcast_type)
 
@@ -5299,6 +6006,7 @@ class BroadcastApp(ctk.CTk):
             # keep=True：prev 记为新状态，恢复时恢复成同值 → 不跳变
             self._train_state_prev[no] = state if keep else prev
             self._train_states[no] = state
+            self.apply_train_status_colors()
             # 大屏同源刷新（行已建立时立即生效；未建立时进入大屏自动重建）
             if getattr(self, "screen_rows", None) and self.screen_rows:
                 self._update_screen_statuses(getattr(self, "_screen_smin", 5))
@@ -5329,6 +6037,7 @@ class BroadcastApp(ctk.CTk):
                         vals[7] = prev
                         self.bc_train_tree.item(c, values=tuple(vals))
                     break
+            self.apply_train_status_colors()
             if getattr(self, "screen_rows", None) and self.screen_rows:
                 self._update_screen_statuses(getattr(self, "_screen_smin", 5))
         except Exception:
@@ -5341,7 +6050,12 @@ class BroadcastApp(ctk.CTk):
         clear_queue=True：手动停止时同时清空播放队列（取消所有排队广播）。"""
         self._stop_flag = True
         if clear_queue:
+            self._emergency_queue = None
+            self._emergency_btype = ""
+            if self._bcast_queue:
+                self._queue_ver += 1
             self._bcast_queue = []
+        self._current_btype = ""
         self.set_status("已停止播放")
         self.bc_status_dot.configure(text="● 就绪", text_color="#4a4")
         # 停止后恢复被播放车次的状态（反向同步）
@@ -5376,6 +6090,47 @@ class BroadcastApp(ctk.CTk):
         except Exception:
             pass
 
+    def _queue_sort_key(self, item):
+        """队列排序键：优先级（停止检票→开始检票→检票预告→晚点/停运→其他）
+        → 同优先级按车次开点时间早的在前 → 入队时间兜底。"""
+        bt = item[1] if len(item) > 1 else ""
+        tn = item[2] if len(item) > 2 else ""
+        ts = item[3] if len(item) > 3 else ""
+        dep = None
+        tv = self._train_values_by_no(tn)
+        if tv:
+            dep = parse_hhmm(tv.get("dep"))
+        return (bcast_priority(bt), 24 * 60 + 9999 if dep is None else dep, str(ts))
+
+    def _sort_queue(self):
+        """按优先级重排队列（稳定排序，同优先级保持入队顺序）"""
+        try:
+            self._bcast_queue.sort(key=self._queue_sort_key)
+        except Exception:
+            pass
+        self._queue_ver += 1
+
+    def _enqueue_broadcast(self, audio_list, btype, train_no="", source="手动"):
+        """入队：同类型+同车次去重（更新原项），再按优先级+开点时间插入。"""
+        if not audio_list:
+            self.set_status("无可用音频片段，未加入队列")
+            return False
+        train_no = str(train_no or "")
+        item = (audio_list, btype, train_no, time.strftime("%H:%M:%S"), source or "手动")
+        for i, old in enumerate(self._bcast_queue):
+            old_bt = old[1] if len(old) > 1 else ""
+            old_tn = old[2] if len(old) > 2 else ""
+            if old_bt == btype and str(old_tn) == train_no:
+                self._bcast_queue[i] = item
+                self._sort_queue()
+                self.set_status(f"队列中已有相同广播，已更新排序：{btype} {train_no}".strip())
+                return True
+        self._bcast_queue.append(item)
+        self._sort_queue()
+        _gap_txt = f"，每条间隔 {getattr(self, '_bcast_gap', 0)} 秒" if getattr(self, "_bcast_gap", 0) else ""
+        self.set_status(f"已加入播放队列（第 {len(self._bcast_queue)} 位，按优先级排序）{_gap_txt}，播完自动继续")
+        return True
+
     def _start_next_in_queue(self):
         """播放队列中的下一个（主线程调用：播放完成后自动续播）
         队列为空、正在播放、或有紧急广播挂起时不动作。"""
@@ -5387,12 +6142,14 @@ class BroadcastApp(ctk.CTk):
             while self._bcast_queue:
                 item = self._bcast_queue.pop(0)
                 al, bt = item[0], item[1]
-                # 恢复该队列项的车次号（保证状态/日志/大屏同步正确）
+                # 恢复该队列项的车次号/来源（保证状态/日志/大屏同步正确）
                 tn = item[2] if len(item) > 2 else ""
+                src = item[4] if len(item) > 4 else "手动"
                 if tn:
                     self._active_bcast_train = tn
+                self._current_btype = bt
                 self._queue_ver += 1  # 出队 → 通知界面刷新
-                self.play_concat_audio(al, emergency=False, btype=bt)
+                self.play_concat_audio(al, emergency=False, btype=bt, source=src)
                 if getattr(self, "_playing", False):
                     return  # 已开始播放 → 等完成回调
                 # 该条无音频/无法播放 → 继续下一个
@@ -5413,30 +6170,31 @@ class BroadcastApp(ctk.CTk):
                 self._emergency_queue = None
                 self._emergency_btype = ""
                 if _al:
-                    self.play_concat_audio(_al, btype=_bt)
+                    self.play_concat_audio(_al, btype=_bt, source="紧急")
         self.after(200, _chk)
 
     def _log_bcast(self, btype, train_no="", source="手动"):
-        """记录广播历史到 bcast_log.json（保留最近 2000 条）"""
+        """记录广播历史到 bcast_log.json（保留最近 2000 条，线程安全）"""
         try:
-            path = os.path.join(get_project_root(), "bcast_log.json")
-            logs = []
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        logs = json.load(f) or []
-                except Exception:
-                    logs = []
-            logs.append({
-                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "type": btype,
-                "train": train_no or "",
-                "source": source,
-            })
-            if len(logs) > 2000:
-                logs = logs[-2000:]
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(logs, f, ensure_ascii=False, indent=2)
+            with _LOG_LOCK:
+                path = os.path.join(get_project_root(), "bcast_log.json")
+                logs = []
+                if os.path.exists(path):
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            logs = json.load(f) or []
+                    except Exception:
+                        logs = []
+                logs.append({
+                    "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "type": btype,
+                    "train": train_no or "",
+                    "source": source,
+                })
+                if len(logs) > 2000:
+                    logs = logs[-2000:]
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(logs, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
 
@@ -5457,7 +6215,7 @@ class BroadcastApp(ctk.CTk):
         list_frame.grid_columnconfigure(0, weight=1)
         list_frame.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkLabel(list_frame, text="🚆 车次列表（9 列与主界面同源，选中自动回填）",
+        ctk.CTkLabel(list_frame, text="车次列表（9 列与主界面同源，选中自动回填）",
                      font=ctk.CTkFont(size=14, weight="bold"),
                      text_color=DS["accent"]).grid(row=0, column=0, sticky="w", padx=12, pady=(10, 5))
 
@@ -5588,7 +6346,7 @@ class BroadcastApp(ctk.CTk):
         toolbar.grid_propagate(False)
         t_inner = ctk.CTkFrame(toolbar, fg_color="transparent")
         t_inner.pack(fill="x", padx=12, pady=8)
-        ctk.CTkLabel(t_inner, text="📋 广播队列管理", font=ctk.CTkFont(size=15, weight="bold"),
+        ctk.CTkLabel(t_inner, text="广播队列管理", font=ctk.CTkFont(size=15, weight="bold"),
                      text_color=DS["accent"]).pack(side="left", padx=(5, 20))
         self.queue_status_dot = ctk.CTkLabel(t_inner, text="● 系统就绪",
                                              font=ctk.CTkFont(size=12, weight="bold"),
@@ -5611,7 +6369,7 @@ class BroadcastApp(ctk.CTk):
         ctk.CTkLabel(head, text="播放中再点其他车次广播 → 自动排队，前一个播完自动播下一个；紧急广播优先抢占",
                      font=ctk.CTkFont(size=11), text_color="#667").pack(side="left", padx=10)
 
-        cols = ("序号", "广播类型", "车次", "入队时间")
+        cols = ("序号", "优先级", "广播类型", "车次", "入队时间")
         self.queue_tree = ttk.Treeview(body, columns=cols, show="headings", height=14)
         style = ttk.Style()
         try:
@@ -5627,7 +6385,7 @@ class BroadcastApp(ctk.CTk):
                   foreground=[("selected", "#ffffff")])
         for c in cols:
             self.queue_tree.heading(c, text=c)
-        widths = {"序号": 70, "广播类型": 260, "车次": 160, "入队时间": 120}
+        widths = {"序号": 60, "优先级": 125, "广播类型": 220, "车次": 150, "入队时间": 110}
         for c in cols:
             self.queue_tree.column(c, width=widths.get(c, 120), anchor="center", stretch=True)
         self.queue_tree.grid(row=1, column=0, sticky="nsew", padx=15, pady=(0, 8))
@@ -5641,16 +6399,18 @@ class BroadcastApp(ctk.CTk):
         ops = ctk.CTkFrame(panel, fg_color="transparent")
         ops.grid(row=2, column=0, sticky="ew", pady=(8, 0))
         btn_style = {"height": 32, "font": ctk.CTkFont(size=12)}
-        ctk.CTkButton(ops, text="⬆ 上移", fg_color=DS["btn"], hover_color=DS["btn_hover"],
+        ctk.CTkButton(ops, text="上移", fg_color=DS["btn"], hover_color=DS["btn_hover"],
                       command=self.queue_move_up, width=80, **btn_style).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(ops, text="⬇ 下移", fg_color=DS["btn"], hover_color=DS["btn_hover"],
+        ctk.CTkButton(ops, text="下移", fg_color=DS["btn"], hover_color=DS["btn_hover"],
                       command=self.queue_move_down, width=80, **btn_style).pack(side="left", padx=6)
-        ctk.CTkButton(ops, text="🗑 移除选中", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
+        ctk.CTkButton(ops, text="移除选中", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                       command=self.queue_remove_selected, width=110, **btn_style).pack(side="left", padx=6)
-        ctk.CTkButton(ops, text="🧹 清空队列", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
+        ctk.CTkButton(ops, text="清空队列", fg_color=DS["btn_danger"], hover_color=DS["btn_danger_hover"],
                       command=self.queue_clear_all, width=110, **btn_style).pack(side="left", padx=6)
-        ctk.CTkButton(ops, text="🔄 刷新", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
+        ctk.CTkButton(ops, text="刷新", fg_color=DS["btn_primary"], hover_color=DS["btn_primary_hover"],
                       command=self._refresh_queue_panel, width=80, **btn_style).pack(side="left", padx=6)
+        ctk.CTkButton(ops, text="按优先级排序", fg_color=DS["btn"], hover_color=DS["btn_hover"],
+                      command=self.queue_sort_priority, width=125, **btn_style).pack(side="left", padx=6)
         ctk.CTkLabel(ops, text="提示：移除/清空只影响待播队列，当前正在播放的广播不受影响",
                      font=ctk.CTkFont(size=11), text_color="#667").pack(side="right")
         return panel
@@ -5660,16 +6420,25 @@ class BroadcastApp(ctk.CTk):
         try:
             if not hasattr(self, "queue_tree"):
                 return
-            # 清空旧行
-            for it in self.queue_tree.get_children():
-                self.queue_tree.delete(it)
+            # 增量更新：不整表删除重建，队列变化时行内容原地替换，避免闪一下
             q = self._bcast_queue
+            desired = []
             for i, item in enumerate(q, start=1):
-                # 兼容旧二元组/新四元组
                 bt = item[1] if len(item) > 1 else ""
                 tn = item[2] if len(item) > 2 else ""
                 ts = item[3] if len(item) > 3 else "--:--:--"
-                self.queue_tree.insert("", "end", values=(i, bt, tn, ts))
+                desired.append((i, bcast_priority_label(bt), bt, tn, ts))
+            children = list(self.queue_tree.get_children())
+            for idx, vals in enumerate(desired):
+                if idx < len(children):
+                    iid = children[idx]
+                    cur = tuple(self.queue_tree.item(iid)["values"])
+                    if cur != vals:
+                        self.queue_tree.item(iid, values=vals)
+                else:
+                    self.queue_tree.insert("", "end", values=vals)
+            for iid in children[len(desired):]:
+                self.queue_tree.delete(iid)
             n = len(q)
             self.queue_info_label.configure(text=f"队列中：{n} 项")
             if getattr(self, "_playing", False):
@@ -5678,6 +6447,12 @@ class BroadcastApp(ctk.CTk):
                 self.queue_status_dot.configure(text="● 系统就绪", text_color="#4d4")
         except Exception:
             pass
+
+    def queue_sort_priority(self):
+        """按优先级 + 开点时间重新排队（停止检票 → 开始检票 → 检票预告 → 晚点/停运 → 普通）"""
+        self._sort_queue()
+        self._refresh_queue_panel()
+        self.set_status("队列已按优先级排序：停止检票 → 开始检票 → 检票预告 → 晚点/停运 → 普通")
 
     def _queue_sel_index(self):
         """当前选中的队列行索引（1 起）；无选中返回 None"""
@@ -5814,6 +6589,11 @@ class BroadcastApp(ctk.CTk):
         self.screen_panel.grid_remove()
         self.system_panel.grid_remove()
         self.bcast_set_panel.grid_remove()
+        # 进入页面先增量同步一次，避免隐藏期间的数据要等 5 秒自动刷新才出现
+        try:
+            self.load_trains()
+        except Exception:
+            pass
         self.refresh_sched_train_list()
         # 启动车辆列表自动刷新（每 10 秒，仅启动一次，页面隐藏时自动跳过）
         if not getattr(self, "_train_auto_refresh_on", False):
@@ -5851,29 +6631,43 @@ class BroadcastApp(ctk.CTk):
         self.bcast_set_panel.grid()
 
     # ========== 功能函数 ==========
-    def _screen_sorted_rows(self, rows):
-        """大屏车次排序：正在检票最前 → 待检票其次 → 其他；同状态内按开点时间升序（早的在前），无/非法开点排末尾"""
-        def _prio(r):
-            try:
-                _st = str(r[7] if len(r) > 7 else "")
-            except Exception:
-                _st = ""
-            if _st in ("正在检票", "检票中"):
-                return 0
-            if _st in ("待检票", "正在候车"):
-                return 1
-            return 2
-        def _tmin(r):
-            try:
-                _t = str(r[4] if len(r) > 4 else "").strip()
-                _hh, _mm = _t.split(":")
-                return int(_hh) * 60 + int(_mm)
-            except Exception:
-                return 24 * 60 + 9999
+    def _screen_sorted_rows(self, rows, smin=None):
+        """统一车次排序（主列表/大屏/副屏共用）。
+        time 模式：按开点时间升序，状态只作同时间兜底（默认，顺序稳定不跳动）；
+        status 模式：正在检票 → 停止检票 → 晚点 → 待检票 → 停运 → 已发车/到达。
+        无/非法开点排末尾，车次号自然排序兜底；重复车次只保留第一条。"""
         try:
-            return sorted(rows, key=lambda r: (_prio(r), _tmin(r)))
+            if smin is None:
+                smin = getattr(self, "_screen_smin", 5)
         except Exception:
-            return rows
+            smin = 5
+        seen = set()
+        unique = []
+        for r in rows:
+            try:
+                key = str(r[0]).strip()
+            except Exception:
+                key = ""
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            unique.append(r)
+        mode = getattr(self, "_screen_sort_mode", "time")
+
+        def _key(r):
+            st = effective_train_status(r, smin)
+            dep = parse_hhmm(r[4] if len(r) > 4 else "")
+            dep = 24 * 60 + 9999 if dep is None else dep
+            rank = STATUS_RANK.get(st, 3)
+            if mode == "status":
+                return (rank, dep, train_no_key(r[0]))
+            # 时间模式只按开点 + 车次号排序：状态变化绝不导致行位置互换
+            return (dep, train_no_key(r[0]))
+
+        try:
+            return sorted(unique, key=_key)
+        except Exception:
+            return unique
 
     def refresh_screen(self, silent=False):
         """刷新大屏：增量更新（表头只建一次、行按车次号 diff，排序变化只移动行位置不覆盖内容）
@@ -5901,7 +6695,7 @@ class BroadcastApp(ctk.CTk):
             rows = []
             for c in self.bc_train_tree.get_children():
                 rows.append(list(self.bc_train_tree.item(c)["values"]))
-            rows = self._screen_sorted_rows(rows)
+            rows = self._screen_sorted_rows(rows, smin)
             new_keys = [str(r[0]) for r in rows]
             # 顺序缓存：仅当顺序真正变化（新增/删除/状态排序变化）时才重排 grid，
             # 消除每 2 秒全量 grid 重设导致的视觉抖动（车次一多就乱跳的根因之一）
@@ -5937,15 +6731,24 @@ class BroadcastApp(ctk.CTk):
     def _screen_tick(self):
         """大屏时钟每秒刷新；每 2 秒自动同步一次车次数据与状态（增量更新，无变化不重绘）。
         这样在广播管理/车辆管理更新车次后，停留在大屏页也会自动跟随，无需手动点刷新。"""
+        # 防止重复进入大屏时叠加多条 after 循环：取消上一条，再重启唯一一条
+        _old_tick = getattr(self, "_screen_tick_after", None)
+        if _old_tick:
+            try:
+                self.after_cancel(_old_tick)
+            except Exception:
+                pass
+        self._screen_tick_on = True
         try:
             if not self.screen_panel.winfo_ismapped():
-                self.after(1000, self._screen_tick)
+                self._screen_tick_after = self.after(1000, self._screen_tick)
                 return
             now = time.strftime("%H:%M:%S")
             if hasattr(self, "screen_clock") and self.screen_clock.winfo_exists():
                 if self.screen_clock.cget("text") != now:
                     self.screen_clock.configure(text=now)
-                _d = time.strftime("%Y年%m月%d日  %A")
+                _wd = "一二三四五六日"[time.localtime().tm_wday]
+                _d = time.strftime("%Y年%m月%d日") + f"  星期{_wd}"
                 if self.screen_date.cget("text") != _d:
                     self.screen_date.configure(text=_d)
             # 每 2 秒静默刷新（refresh_screen 内含状态列更新 + 增量 diff）
@@ -5955,7 +6758,7 @@ class BroadcastApp(ctk.CTk):
                 self.refresh_screen(silent=True)
         except Exception:
             pass
-        self.after(1000, self._screen_tick)
+        self._screen_tick_after = self.after(1000, self._screen_tick)
 
     def refresh_sched_train_list(self):
         """刷新定时任务车次下拉（从主界面车次列表）"""
@@ -5996,7 +6799,7 @@ class BroadcastApp(ctk.CTk):
         for c in self.sched_tree.get_children():
             self.sched_tree.delete(c)
         for s in getattr(self, "bc_schedule", []):
-            st = "✅ 启用" if s.get("enabled") else "⏸ 停用"
+            st = "启用" if s.get("enabled") else "停用"
             self.sched_tree.insert("", "end", values=(s.get("time", ""), s.get("type", ""),
                                                        s.get("train", "") or "（默认）", st))
         zebra(self.sched_tree)
@@ -6076,27 +6879,33 @@ class BroadcastApp(ctk.CTk):
         self.set_status(f"已清空全部定时任务（{'已保存' if ok else '保存失败'}）")
 
     def _schedule_tick(self):
-        """每秒轮询：到点且已启用 → 播放对应广播（当天同一任务只触发一次）"""
+        """每秒轮询：到点且已启用 → 播放对应广播（同一任务当天只触发一次）
+        多个任务同一分钟时全部触发，按优先级进入播放队列，不会互相覆盖。"""
         try:
             now = time.strftime("%H:%M")
             day = time.strftime("%Y-%m-%d")
-            last = getattr(self, "_last_sched", {})
-            for s in getattr(self, "bc_schedule", []):
+            last = dict(getattr(self, "_last_sched", {}) or {})
+            for idx, s in enumerate(getattr(self, "bc_schedule", [])):
                 if not s.get("enabled"):
                     continue
                 if s.get("time") != now:
                     continue
-                key = day + "|" + s["time"] + "|" + str(s.get("train", ""))
+                key = f"{day}|{idx}|{s.get('time')}|{s.get('type')}|{s.get('train')}"
                 if last.get(key):
                     continue
-                self._last_sched = {key: True}
+                last[key] = True
                 self.schedule_play(s.get("type", "检票预告"), s.get("train", ""))
+            # 跨天清理，防止字典无限增长
+            if len(last) > 800:
+                last = dict(list(last.items())[-400:])
+            self._last_sched = last
         except Exception:
             pass
         self.after(1000, self._schedule_tick)
 
     def _auto_sched_tick(self):
-        """车次时刻自动广播：每 30 秒检查开点，到点触发检票预告/开始检票（每日每车次一次）"""
+        """车次时刻自动广播：每 30 秒检查一次；进入提前量窗口后触发（每日每车次每类一次）。
+        不再要求“正好等于”，程序晚启动几分钟也能补上，避免错过广播。"""
         try:
             cfg = self.load_sys_config()
             if cfg.get("train_auto_bcast", False):
@@ -6119,18 +6928,17 @@ class BroadcastApp(ctk.CTk):
                     v = list(self.bc_train_tree.item(c)["values"])
                     if len(v) < 9:
                         continue
-                    no, dep = str(v[0]), str(v[4]).strip()
+                    no, dep = str(v[0]).strip(), str(v[4]).strip()
                     if not no or not dep:
                         continue
-                    try:
-                        hh, mm = dep.split(":")
-                        dep_min = int(hh) * 60 + int(mm)
-                    except Exception:
+                    dep_min = parse_hhmm(dep)
+                    if dep_min is None:
                         continue
-                    if dep_min - now_min == preview_min and (no + "|预告") not in fired:
+                    diff = dep_min - now_min
+                    if -1 <= diff <= preview_min and (no + "|预告") not in fired:
                         fired.add(no + "|预告")
                         self._auto_bcast_train(no, "检票预告")
-                    if dep_min - now_min == start_min and (no + "|开始") not in fired:
+                    if -1 <= diff <= start_min and (no + "|开始") not in fired:
                         fired.add(no + "|开始")
                         self._auto_bcast_train(no, "开始检票")
                 self._auto_fired = fired
@@ -6142,26 +6950,30 @@ class BroadcastApp(ctk.CTk):
             pass
 
     def _auto_bcast_train(self, no, btype):
-        """车次时刻自动广播触发：设置当前车次并播放（同步大屏）"""
+        """车次时刻自动广播触发：用完整车次信息播放（不丢发站/到站/检票口/站台），
+        正在播放时按优先级排队，不丢广播。"""
         try:
-            if getattr(self, "_playing", False):
+            tv = self._train_values_by_no(no)
+            if not tv:
+                self.set_status(f"车次时刻自动广播：未找到车次 {no}，已跳过")
                 return
-            self.current_train = {"no": no}
+            self.current_train = dict(tv)
             self._active_bcast_train = no
             self._auto_bcast_flag = True
             if btype == "检票预告":
                 self._set_train_state(no, "待检票", keep=True)
             else:
                 self._set_train_state(no, "正在检票", keep=True)
-            audio_list = self.build_audio_list_from_steps(btype)
+            audio_list = self.build_audio_list_from_steps(btype, train_values=tv)
             if audio_list:
                 self.bc_status_dot.configure(text="● 自动广播中", text_color="#f80")
                 self.set_status(f"车次时刻自动广播：{no} {btype}")
-                self.play_concat_audio(audio_list, btype=btype)
+                self.play_concat_audio(audio_list, btype=btype, source="自动")
             else:
                 self.set_status(f"车次时刻自动广播：{btype} 无可用音频配置")
-            self._auto_bcast_flag = False
-        except Exception:
+        except Exception as _e:
+            self.set_status(f"车次时刻自动广播异常：{_e}")
+        finally:
             self._auto_bcast_flag = False
 
     def _save_train_auto_cfg(self):
@@ -6183,28 +6995,18 @@ class BroadcastApp(ctk.CTk):
             self.set_status(f"保存车次时刻配置失败: {e}")
 
     def schedule_play(self, btype, train_no):
-        """定时触发：按指定车次播放指定类型广播"""
+        """定时触发：按指定车次播放指定类型广播；找不到车次直接报错，绝不用假车次顶替。"""
         train_no = (train_no or "").strip()
-        found = False
-        try:
-            for c in self.bc_train_tree.get_children():
-                vals = self.bc_train_tree.item(c)["values"]
-                if str(vals[0]) == train_no:
-                    self.current_train = {
-                        "no": str(vals[0]),
-                        "from": vals[2] if len(vals) > 2 else "",
-                        "to": vals[3] if len(vals) > 3 else "",
-                        "gate": vals[5] if len(vals) > 5 else "A1",
-                        "platform": vals[6] if len(vals) > 6 else "",
-                    }
-                    found = True
-                    break
-        except Exception:
-            pass
-        if not found:
-            self.current_train = {"no": train_no or "G1234", "from": "杭州东", "to": "宁波",
-                                  "gate": "A1", "platform": "3"}
-        self.set_status(f"⏰ 定时广播触发：{btype} {self.current_train['no']}")
+        tv = self._train_values_by_no(train_no) if train_no else None
+        if train_no and not tv:
+            self.set_status(f"定时广播跳过：未找到车次 {train_no}（{btype}）")
+            return
+        if tv:
+            self.current_train = dict(tv)
+        elif not self.current_train:
+            self.set_status(f"定时广播跳过：{btype} 未指定车次")
+            return
+        self.set_status(f"定时广播触发：{btype} {self.current_train['no']}")
         try:
             if hasattr(self, "bc_status_dot"):
                 self.bc_status_dot.configure(text="● 广播中", text_color="#f80")
@@ -6227,9 +7029,13 @@ class BroadcastApp(ctk.CTk):
                 self.refresh_screen()
         except Exception:
             pass
-        audio_list = self.build_audio_list_from_steps(btype)
+        self.sync_steps_to_memory()
+        steps = self.bc_steps.get(btype) or self.get_default_steps(btype)
+        if "晚点" in btype:
+            steps = self._prepare_delay_steps(steps)
+        audio_list = self.resolve_audio_items(steps, self.current_train)
         if audio_list:
-            self.play_concat_audio(audio_list, btype=btype)
+            self.play_concat_audio(audio_list, btype=btype, source="定时")
         else:
             self.set_status(f"定时广播 {btype} 没有可播放的音频")
             try:
@@ -6268,59 +7074,6 @@ class BroadcastApp(ctk.CTk):
                 self.set_status("系统启动成功（未连接后端）")
             except Exception:
                 pass
-        # 启动完成后播放音乐
-        self.after(500, self.startup_play_music)
-
-    def startup_play_music(self):
-        """启动完成后播放启动音频（从广播设置读取，无配置用默认 tsy/tsy2.mp3，播完自动关闭）"""
-        import threading
-        import ctypes
-        import time as _time
-
-        # 读取广播设置里的启动音频
-        audio_cfg = ""
-        if hasattr(self, "startup_audio_entry"):
-            audio_cfg = self.startup_audio_entry.get().strip()
-        if not audio_cfg:
-            audio_cfg = "tsy/tsy2.mp3"
-        path = self.resolve_audio_path(audio_cfg)
-        if path and not path.startswith(("http://", "https://")) and os.path.exists(path):
-            def _play_and_close():
-                try:
-                    alias = "startup_music"
-                    mci = ctypes.windll.winmm
-                    mci.mciSendStringW(f'close {alias}', None, 0, None)
-                    ret = mci.mciSendStringW(f'open "{path}" alias {alias}', None, 0, None)
-                    if ret == 0:
-                        mci.mciSendStringW(f"play {alias}", None, 0, None)
-                        # 等播完自动关闭，避免占用音频设备
-                        t0 = _time.time()
-                        while _time.time() - t0 < 120:
-                            # 停止标志：主界面点停止可中断启动音频
-                            if getattr(self, "_stop_flag", False):
-                                break
-                            status = ctypes.create_unicode_buffer(255)
-                            mci.mciSendStringW(f"status {alias} mode", status, 255, None)
-                            if status.value != "playing":
-                                break
-                            _time.sleep(0.05)
-                        mci.mciSendStringW(f'close {alias}', None, 0, None)
-                except Exception:
-                    pass
-
-            self.set_status("系统启动成功，已播放启动音频")
-            threading.Thread(target=_play_and_close, daemon=True).start()
-        else:
-            self.set_status("系统启动成功（未配置启动音频，可在广播设置中设置）")
-
-    def show_broadcast_with_startup(self):
-        """进入广播主界面（播放启动音频，5 秒内不重复）"""
-        self.show_broadcast()
-        now = time.time()
-        last = getattr(self, "_last_startup_audio_ts", 0)
-        if now - last > 5:
-            self._last_startup_audio_ts = now
-            self.startup_play_music()
 
     def send_request(self, cmd, params=None):
         """发送 TCP 请求"""
@@ -6433,9 +7186,10 @@ class BroadcastApp(ctk.CTk):
 
         threading.Thread(target=do_play, daemon=True).start()
 
-    def play_concat_audio(self, audio_list, emergency=False, btype=""):
+    def play_concat_audio(self, audio_list, emergency=False, btype="", source=None):
         """拼接多个音频片段：解码→裁静音→统一采样率→合成一个完整音频再播放（绝对无缝）
-        emergency=True：紧急广播抢占——先中断当前播放，等旧线程退出后再播紧急内容"""
+        emergency=True：紧急广播抢占——先中断当前播放，等旧线程退出后再播紧急内容
+        source：广播来源（手动/自动/定时/紧急），入队和日志沿用，避免播放时来源错乱"""
         import threading
         import os
         import ctypes
@@ -6443,6 +7197,7 @@ class BroadcastApp(ctk.CTk):
         import time
 
         root = AUDIO_DIR
+        _src = source or ("紧急" if emergency else ("自动" if getattr(self, "_auto_bcast_flag", False) else "手动"))
 
         # 紧急抢占：中断当前播放，轮询旧线程退出后启动紧急内容（保留普通广播队列，紧急播完自动续播）
         if emergency and getattr(self, "_playing", False):
@@ -6452,30 +7207,25 @@ class BroadcastApp(ctk.CTk):
             self.stop_all_audio(clear_queue=False)
             self._wait_emergency_play()
             return
-        # 非紧急且正在播放：加入播放队列，前一个播完自动播放下一个
+        # 非紧急且正在播放：按优先级加入播放队列，前一个播完自动播放下一个
         if getattr(self, "_playing", False):
             _q_train = getattr(self, "_active_bcast_train", "") or ""
-            self._bcast_queue.append((audio_list, btype, _q_train, time.strftime("%H:%M:%S")))
-            self._queue_ver += 1
-            _gap_txt = f"，每条间隔 {getattr(self, '_bcast_gap', 0)} 秒" if getattr(self, "_bcast_gap", 0) else ""
-            self.set_status(f"正在播放中，已加入播放队列（等待第 {len(self._bcast_queue)} 位）{_gap_txt}，播完自动继续")
+            self._enqueue_broadcast(audio_list, btype, _q_train, _src)
             return
         # 空队列：给出明确提示，不静默播放（防止"变更站台/旅客突发"等缺音频类型无声无反馈）
         if not audio_list:
             self.set_status("无可用音频片段，请检查语音包或广播配置")
             self._playing = False
             return
-        self._playing = True
         self._stop_flag = False
-        # 记录广播历史（播放真正开始时）
-        _src = "紧急" if emergency else ("自动" if getattr(self, "_auto_bcast_flag", False) else "手动")
-        self._log_bcast(btype or "手动播放", getattr(self, "_active_bcast_train", "") or "", _src)
+        self._current_btype = btype
+        # 日志在真正合成出音频后再写（避免“缺音频也记一条已播”的假记录）
+        _log_btype = btype or "手动播放"
+        _log_train = getattr(self, "_active_bcast_train", "") or ""
 
         # ===== 主线程读取 Tkinter 控件快照（后台线程禁止访问控件，否则 RuntimeError）=====
-        cfg_start_sound = self.start_sound_btn.cget("text") if hasattr(self, "start_sound_btn") else ""
-        cfg_end_sound = self.end_sound_btn.cget("text") if hasattr(self, "end_sound_btn") else ""
-        if cfg_end_sound == "无（点击选择）":
-            cfg_end_sound = ""
+        cfg_start_sound = getattr(self, "_start_sound_value", "")
+        cfg_end_sound = getattr(self, "_end_sound_value", "")
         cfg_main_audio = self.main_audio_entry.get().strip() if hasattr(self, "main_audio_entry") else ""
         try:
             cfg_speed = float(self.speed_slider.get()) if hasattr(self, "speed_slider") else 1.0
@@ -6657,6 +7407,9 @@ class BroadcastApp(ctk.CTk):
                 self._queue_pending = True
                 return
 
+            # 真正有音频可播时才记录历史
+            self._log_bcast(_log_btype, _log_train, _src)
+
             if missing:
                 safe_after(0, lambda m=missing: self.set_status(f"缺音频: {'、'.join(m)}"))
 
@@ -6707,7 +7460,7 @@ class BroadcastApp(ctk.CTk):
             # MCI 播放一个完整文件（绝对无缝）
             mci = ctypes.windll.winmm
             alias = "bc_merged"
-            # 播放前先释放其他占用（如启动音频）
+            # 播放前先释放其他占用
             mci.mciSendStringW("close startup_music", None, 0, None)
             mci.mciSendStringW(f'close {alias}', None, 0, None)
             ret = mci.mciSendStringW(f'open "{out_wav}" alias {alias}', None, 0, None)
@@ -6732,7 +7485,25 @@ class BroadcastApp(ctk.CTk):
             self._playing = False
             self._queue_pending = True
 
-        threading.Thread(target=concat_and_play, daemon=True).start()
+        def _worker():
+            try:
+                concat_and_play()
+            except Exception as _e:
+                safe_after(0, lambda _e=_e: self.set_status(f"播放异常: {_e}"))
+            finally:
+                # 任何异常都不能让 _playing 卡在 True（否则后续广播全部只能排队）
+                self._playing = False
+                self._queue_pending = True
+                self._current_btype = ""
+
+        self._playing = True
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as _e:
+            self._playing = False
+            self._queue_pending = True
+            self._current_btype = ""
+            self.set_status(f"播放线程启动失败: {_e}")
 
     def send_broadcast(self):
         content = getattr(self, "bc_manual_entry", None)
@@ -6759,31 +7530,65 @@ class BroadcastApp(ctk.CTk):
         self.set_status("恢复音频")
 
     def load_trains(self):
-        """车辆管理面板：从主界面车次列表同步显示（与大屏同排序：状态优先+开点升序；自动刷新保留选中）"""
-        sel_vals = None
+        """车辆管理面板：增量同步主界面车次（不整表删除重建，刷新无闪烁）。"""
         sel = self.train_tree.selection()
+        sel_no = ""
         if sel:
-            sel_vals = list(self.train_tree.item(sel[0])["values"])
-        for item in self.train_tree.get_children():
-            self.train_tree.delete(item)
+            try:
+                sel_no = str(self.train_tree.item(sel[0])["values"][0]).strip()
+            except Exception:
+                sel_no = ""
         rows = []
         for c in self.bc_train_tree.get_children():
             vals = list(self.bc_train_tree.item(c)["values"])
             if len(vals) < 9:
                 vals = vals + [""] * (9 - len(vals))
             rows.append(vals[:9])
-        # 与大屏完全一致：正在检票最前 → 待检票其次 → 其他；同状态内按开点时间早的在前
         rows = self._screen_sorted_rows(rows)
-        last_iid = None
+
+        tree = self.train_tree
+        existing = {}
+        for c in tree.get_children():
+            vals = list(tree.item(c)["values"])
+            if vals:
+                existing[str(vals[0]).strip()] = c
+        desired = [str(r[0]).strip() for r in rows]
+
+        # 删除已不存在的行
+        for key, iid in list(existing.items()):
+            if key not in desired:
+                try:
+                    tree.delete(iid)
+                except Exception:
+                    pass
+                existing.pop(key, None)
+
+        # 只更新内容变化的行
         for vals in rows:
-            iid = self.train_tree.insert("", "end", values=tuple(vals))
-            if sel_vals is not None and vals == sel_vals[:9]:
-                last_iid = iid
-        zebra(self.train_tree)
-        if last_iid is not None:
-            self.train_tree.selection_set(last_iid)
-            self.train_tree.see(last_iid)
-            self.on_train_tree_select()
+            key = str(vals[0]).strip()
+            iid = existing.get(key)
+            if iid is None:
+                existing[key] = tree.insert("", "end", values=tuple(vals))
+            else:
+                cur = list(tree.item(iid)["values"])
+                cur = cur + [""] * (9 - len(cur)) if len(cur) < 9 else cur[:9]
+                if tuple(cur) != tuple(vals):
+                    tree.item(iid, values=tuple(vals))
+
+        # 只有顺序真正变化才移动行
+        ordered = [existing[k] for k in desired if k in existing]
+        if list(tree.get_children()) != ordered:
+            for idx, iid in enumerate(ordered):
+                tree.move(iid, "", idx)
+        zebra(tree)
+
+        # 按车次号恢复选中，不重置详情区
+        if sel_no and sel_no in existing:
+            iid = existing[sel_no]
+            if tree.selection() != (iid,):
+                tree.selection_set(iid)
+                tree.see(iid)
+                self.on_train_tree_select()
 
 
     def add_train(self):
@@ -6809,9 +7614,21 @@ class BroadcastApp(ctk.CTk):
             if self.bc_train_tree.item(c)["values"][0] == no:
                 self.bc_train_tree.delete(c)
                 break
+        if getattr(self, "current_train", None) and str(self.current_train.get("no", "")) == str(no):
+            self.current_train = None
+            if hasattr(self, "current_train_label"):
+                self.current_train_label.configure(text="未选择车次")
         zebra(self.bc_train_tree)
+        self.sort_train_tree()
         self.save_trains_data()
-        self.train_tree.delete(sel)
+        try:
+            self.train_tree.delete(sel)
+        except Exception:
+            pass
+        try:
+            self.refresh_screen(silent=True)
+        except Exception:
+            pass
         self.set_status(f"已移除车次：{no}")
 
     def sync_train_to_main(self):
@@ -6824,6 +7641,7 @@ class BroadcastApp(ctk.CTk):
                 vals = vals + [""] * (9 - len(vals))
             self.bc_train_tree.insert("", "end", values=tuple(vals[:9]))
         zebra(self.bc_train_tree)
+        self.sort_train_tree()
         self.save_trains_data()
 
     def logout(self):
@@ -6833,6 +7651,213 @@ class BroadcastApp(ctk.CTk):
     def quit_app(self):
         self.set_status("关闭系统")
         self.quit()
+
+# ============================================================
+# 纯 Python 启动/登录界面（无图标、无 C++ 依赖）
+# ============================================================
+class _StartupApp:
+    """启动画面 + 登录，全部用 tkinter 实现；不加载任何图标。"""
+    BG = "#08111f"
+    PANEL = "#0f1d31"
+    LINE = "#1b3352"
+    ACCENT = "#2f8cff"
+    TEXT = "#eaf2ff"
+    DIM = "#7f95b5"
+    DANGER = "#ff6b6b"
+
+    def __init__(self):
+        self.ok = False
+        self.username = "admin"
+        self._login_shown = False
+        self.root = tk.Tk()
+        self.root.title(APP_TITLE)
+        self.root.withdraw()
+        self.root.overrideredirect(True)
+        self.root.configure(bg=self.BG)
+        self._splash()
+
+    def _center(self, w, h):
+        self.root.update_idletasks()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        x, y = (sw - w) // 2, max(0, (sh - h) // 2 - 24)
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _clear(self):
+        for w in self.root.winfo_children():
+            try:
+                w.destroy()
+            except Exception:
+                pass
+
+    def _drag_bind(self, widget):
+        widget.bind("<ButtonPress-1>", self._drag_start)
+        widget.bind("<B1-Motion>", self._drag_move)
+
+    def _drag_start(self, e):
+        self._dx = e.x_root - self.root.winfo_x()
+        self._dy = e.y_root - self.root.winfo_y()
+
+    def _drag_move(self, e):
+        self.root.geometry(f"+{e.x_root - self._dx}+{e.y_root - self._dy}")
+
+    def _splash(self):
+        self._center(680, 380)
+        self.root.deiconify()
+        box = tk.Frame(self.root, bg=self.BG)
+        box.pack(fill="both", expand=True)
+        tk.Label(box, text="旅客服务系统", bg=self.BG, fg=self.ACCENT,
+                 font=("Microsoft YaHei UI", 10, "bold")).pack(pady=(78, 6))
+        tk.Label(box, text="智能管理广播平台", bg=self.BG, fg=self.TEXT,
+                 font=("Microsoft YaHei UI", 26, "bold")).pack()
+        tk.Label(box, text="PASSENGER SERVICE BROADCAST", bg=self.BG, fg=self.DIM,
+                 font=("Consolas", 9)).pack(pady=(8, 28))
+        tk.Frame(box, bg=self.ACCENT, height=2, width=280).pack()
+        tk.Label(box, text="正在启动…", bg=self.BG, fg=self.DIM,
+                 font=("Microsoft YaHei UI", 10)).pack(pady=(24, 0))
+        tk.Label(box, text="V26.10.2", bg=self.BG, fg="#425a7a",
+                 font=("Consolas", 8)).pack(side="bottom", pady=16)
+        self.root.bind("<Button-1>", lambda e: self._show_login())
+        self._splash_after = self.root.after(1200, self._show_login)
+
+    def _show_login(self):
+        if getattr(self, "_login_shown", False):
+            return
+        self._login_shown = True
+        try:
+            self.root.after_cancel(getattr(self, "_splash_after", None))
+        except Exception:
+            pass
+        try:
+            self.root.unbind("<Button-1>")
+        except Exception:
+            pass
+        self._clear()
+        self._center(760, 470)
+        cfg_user, cfg_pwd, remember = _read_login_cfg()
+
+        bar = tk.Frame(self.root, bg=self.BG, height=38)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        t = tk.Label(bar, text="登录", bg=self.BG, fg=self.DIM,
+                     font=("Microsoft YaHei UI", 10))
+        t.pack(side="left", padx=16)
+        close = tk.Button(bar, text="关闭", command=self._close, bg=self.BG, fg=self.DIM,
+                          activebackground=self.BG, activeforeground=self.TEXT,
+                          relief="flat", bd=0, font=("Microsoft YaHei UI", 10), cursor="hand2")
+        close.pack(side="right", padx=10)
+        for w in (bar, t):
+            self._drag_bind(w)
+
+        tk.Label(self.root, text="旅客服务系统智能管理广播平台", bg=self.BG, fg=self.TEXT,
+                 font=("Microsoft YaHei UI", 22, "bold")).pack(pady=(26, 4))
+        tk.Label(self.root, text="请输入账号和密码进入控制台", bg=self.BG, fg=self.DIM,
+                 font=("Microsoft YaHei UI", 10)).pack(pady=(0, 26))
+
+        form = tk.Frame(self.root, bg=self.BG)
+        form.pack()
+        tk.Label(form, text="账号", bg=self.BG, fg=self.DIM,
+                 font=("Microsoft YaHei UI", 10), anchor="w").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.user_var = tk.StringVar(value=cfg_user)
+        ent_user = tk.Entry(form, textvariable=self.user_var, width=34,
+                            bg=self.PANEL, fg=self.TEXT, insertbackground=self.TEXT,
+                            relief="flat", bd=0, highlightthickness=1,
+                            highlightbackground=self.LINE, highlightcolor=self.ACCENT,
+                            font=("Microsoft YaHei UI", 12))
+        ent_user.grid(row=1, column=0, ipady=9, pady=(0, 14))
+
+        tk.Label(form, text="密码", bg=self.BG, fg=self.DIM,
+                 font=("Microsoft YaHei UI", 10), anchor="w").grid(row=2, column=0, sticky="w", pady=(0, 6))
+        self.pwd_var = tk.StringVar(value=cfg_pwd)
+        ent_pwd = tk.Entry(form, textvariable=self.pwd_var, width=34, show="*",
+                           bg=self.PANEL, fg=self.TEXT, insertbackground=self.TEXT,
+                           relief="flat", bd=0, highlightthickness=1,
+                           highlightbackground=self.LINE, highlightcolor=self.ACCENT,
+                           font=("Microsoft YaHei UI", 12))
+        ent_pwd.grid(row=3, column=0, ipady=9, pady=(0, 10))
+
+        self.remember_var = tk.BooleanVar(value=bool(remember))
+        chk = tk.Checkbutton(form, text="记住密码", variable=self.remember_var,
+                             bg=self.BG, fg=self.DIM, activebackground=self.BG,
+                             activeforeground=self.TEXT, selectcolor=self.PANEL,
+                             bd=0, highlightthickness=0, font=("Microsoft YaHei UI", 9))
+        chk.grid(row=4, column=0, sticky="w", pady=(0, 12))
+
+        btn = tk.Button(form, text="登  录", command=self._do_login,
+                        bg=self.ACCENT, fg="#ffffff", activebackground="#2578e0",
+                        activeforeground="#ffffff", relief="flat", bd=0,
+                        font=("Microsoft YaHei UI", 12, "bold"), cursor="hand2")
+        btn.grid(row=5, column=0, sticky="ew", ipady=8)
+        self.err = tk.Label(self.root, text="", bg=self.BG, fg=self.DANGER,
+                            font=("Microsoft YaHei UI", 9))
+        self.err.pack(pady=(10, 0))
+
+        ent_user.focus_set()
+        ent_user.bind("<Return>", lambda e: ent_pwd.focus_set())
+        ent_pwd.bind("<Return>", lambda e: self._do_login())
+        self.root.bind("<Escape>", lambda e: self._close())
+
+    def _do_login(self):
+        u = self.user_var.get().strip()
+        p = self.pwd_var.get()
+        cfg_user, cfg_pwd, _ = _read_login_cfg()
+        if u != cfg_user or p != cfg_pwd:
+            self.err.configure(text="账号或密码错误")
+            return
+        if self.remember_var.get():
+            _save_login_cfg(u, p, True)
+        else:
+            _save_login_cfg(u, "", False)
+        self.ok = True
+        self.username = u
+        self.root.destroy()
+
+    def _close(self):
+        self.ok = False
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+
+    def run(self):
+        self.root.mainloop()
+        return self.ok, self.username
+
+
+def _read_login_cfg():
+    """读取本地登录配置；缺省 admin/123456，不依赖后端。"""
+    import configparser
+    u, p, remember = "admin", "123456", False
+    try:
+        cp = configparser.ConfigParser()
+        cp.read(os.path.join(get_project_root(), "config.ini"), encoding="utf-8")
+        if cp.has_section("login"):
+            u = (cp.get("login", "username", fallback="") or "admin").strip() or "admin"
+            p = cp.get("login", "password", fallback="")
+            if not p:
+                p = "123456"
+            remember = cp.get("login", "remember_pwd", fallback="0").strip() in ("1", "true", "True")
+    except Exception:
+        pass
+    return u, p, remember
+
+
+def _save_login_cfg(username, password, remember):
+    import configparser
+    try:
+        path = os.path.join(get_project_root(), "config.ini")
+        cp = configparser.ConfigParser()
+        cp.read(path, encoding="utf-8")
+        if not cp.has_section("login"):
+            cp.add_section("login")
+        cp.set("login", "username", username)
+        cp.set("login", "password", password if remember else "")
+        cp.set("login", "remember_user", "1")
+        cp.set("login", "remember_pwd", "1" if remember else "0")
+        with open(path, "w", encoding="utf-8") as f:
+            cp.write(f)
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     # ===== 启动自检：关键文件缺失时提示（不阻止启动，避免静默闪退）=====
@@ -6864,7 +7889,10 @@ if __name__ == "__main__":
 
     # ===== 全局异常兜底：启动/运行异常写入 error.log（闪退时可诊断）=====
     try:
-        app = BroadcastApp(username="admin")
+        _ok, _user = _StartupApp().run()
+        if not _ok:
+            raise SystemExit(0)
+        app = BroadcastApp(username=_user)
         app.mainloop()
     except Exception as _e:
         import traceback as _tb

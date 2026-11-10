@@ -1,4 +1,4 @@
-# -*- mode: python ; coding: utf-8 -*-
+﻿# -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_dynamic_libs
 
 binaries = []
@@ -27,6 +27,7 @@ exe = EXE(
     a.datas,
     [],
     name='main_ui',
+    icon=['ico/CustomTkinter_icon_Windows.ico'],
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -40,5 +41,8 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     version='version_info.txt',
-    icon=['ico/CustomTkinter_icon_Windows.ico'],
 )
+
+
+
+

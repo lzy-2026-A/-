@@ -5,7 +5,6 @@
   "var_speed": 1.0,
   "station_name": "丽水站",
   "stop_check_min": 5,
-  "startup_audio": "tsy/tsy2.mp3",
   "main_audio": "",
   "steps": {
     "检票预告": [
@@ -1133,5 +1132,7 @@
     "紧急-列车停运（通用）",
     "紧急-变更站台",
     "紧急-旅客突发"
-  ]
+  ],
+  "bcast_gap": 0,
+  "screen_sort": "status"
 }
